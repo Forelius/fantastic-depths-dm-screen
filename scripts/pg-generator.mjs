@@ -28,8 +28,13 @@ import {
   isDemihuman
 } from './class-keys.mjs';
 
-/** Pack folder id for base exploration special abilities (not per-item UUIDs). */
-const EXPLORATION_FOLDER_ID = 'SSodW6IBMU8TbVXq';
+// UUIDs for exploration abilities - UUID per abilità di esplorazione
+const EXPLORATION_ABILITIES = [
+  'Compendium.fade-compendiums.item-compendium.Item.akgcSVIh27fXqbVW',
+  'Compendium.fade-compendiums.item-compendium.Item.nPZLQJzGQ7b0g665',
+  'Compendium.fade-compendiums.item-compendium.Item.qTQsTNYfcHpEki7V',
+  'Compendium.fade-compendiums.item-compendium.Item.BDFBtg7fOKRvlzbd'
+];
 
 // Fixed items added to all characters - Oggetti fissi aggiunti a tutti i personaggi
 const FIXED_ITEMS = [
@@ -299,7 +304,7 @@ export class PGGenerator {
     const upgradeKey = getCastingUpgradeKey(classKey);
     
     if (upgradeKey && wisScore >= 13) {
-      const castingClass = await game.fade?.fadeFinder?.getClass?.(null, upgradeKey);
+      const castingClass = await game.fade.fadeFinder.getClass(null, upgradeKey);
       if (castingClass) classItem = castingClass;
     }
 
@@ -388,13 +393,8 @@ export class PGGenerator {
    * Temporarily disables ability-prompt dialogs for silent chargen.
    */
   async _applyClassViaFade(actor, classItem, levelNum) {
-    const classSystem = game.fade?.registry?.getSystem?.('classSystem');
+    const classSystem = game.fade.registry.getSystem('classSystem');
     const level = Number(levelNum) || 1;
-
-    if (!classSystem) {
-      console.warn(`${MODULE_ID} | classSystem unavailable; class fields left as created`);
-      return;
-    }
 
     const promptKey = 'promptAddClassAbilities';
     const sysId = game.system.id;
@@ -563,10 +563,8 @@ export class PGGenerator {
       ?? CONFIG.FADE?.Encumbrance?.Basic?.maxMove
       ?? 120;
     const movementBase = useMetric ? 36 : imperialMaxMove;
-    const movementSystem = game.fade?.registry?.getSystem?.('actorMovement');
-    const movementMode = movementSystem?.createDefaultMode
-      ? movementSystem.createDefaultMode('ground', { base: movementBase, turn: movementBase })
-      : { action: 'ground', base: movementBase, turn: movementBase, round: null, day: null, run: null };
+    const movementMode = game.fade.registry.getSystem('actorMovement')
+      .createDefaultMode('ground', { base: movementBase, turn: movementBase });
     
     // Hit dice from class level (FaDe will re-apply hd after class prep; we roll HP here)
     const levels = classSystem.levels || [];
@@ -719,20 +717,11 @@ export class PGGenerator {
    * Ability score modifier from FaDe abilityScore + userTables (ability-mods-* setting).
    */
   _getAbilityMod(abilityKey, score) {
-    const abilityScoreSys = game.fade?.registry?.getSystem?.('abilityScore');
-    if (abilityScoreSys?.getAdjustments) {
-      const adjustments = abilityScoreSys.getAdjustments(abilityKey) || [];
-      const total = Number(score) || 0;
-      const sorted = [...adjustments].sort((a, b) => b.min - a.min);
-      const adjustment = sorted.find(item => total >= item.min) ?? sorted[0];
-      return adjustment ? Number(adjustment.value) || 0 : 0;
-    }
-    // Last-resort BX-like fallback if registry unavailable
-    if (score >= 16) return 2;
-    if (score >= 13) return 1;
-    if (score <= 5) return -2;
-    if (score <= 8) return -1;
-    return 0;
+    const adjustments = game.fade.registry.getSystem('abilityScore').getAdjustments(abilityKey) || [];
+    const total = Number(score) || 0;
+    const sorted = [...adjustments].sort((a, b) => b.min - a.min);
+    const adjustment = sorted.find(item => total >= item.min) ?? sorted[0];
+    return adjustment ? Number(adjustment.value) || 0 : 0;
   }
 
   // Roll HP for level > 1 - Tira PF per livello > 1
@@ -1277,52 +1266,22 @@ export class PGGenerator {
     
   }
   
-  /**
-   * Add base exploration specialAbilities from the FaDe Exploration folder.
-   * Skips items the actor already has (e.g. class-granted explore abilities).
-   */
+  // Add exploration abilities - Aggiungi abilità esplorazione
   async _addExplorationAbilities(actor) {
-    const finder = game.fade?.fadeFinder;
-    if (!finder?.getFolders || !finder?.getDocsFromFolder) {
-      console.warn(`${MODULE_ID} | fadeFinder folder APIs unavailable; skipping exploration abilities`);
-      return;
-    }
+    // Get existing ability names to avoid duplicates - Ottieni nomi abilità esistenti per evitare duplicati
+    const existingAbilities = actor.items.filter(i => i.type === 'specialAbility').map(i => i.name);
 
-    try {
-      const folders = await finder.getFolders('Item');
-      const exploreFolder = folders.find(f =>
-        f.id === EXPLORATION_FOLDER_ID || f.name === 'Exploration'
-      );
-      if (!exploreFolder) {
-        console.warn(`${MODULE_ID} | Exploration folder not found`);
-        return;
+    for (const uuid of EXPLORATION_ABILITIES) {
+      try {
+        const item = await fromUuid(uuid);
+        if (item) {
+          // Skip if actor already has this ability - Salta se l'attore ha già questa abilità
+          if (existingAbilities.includes(item.name)) continue;
+          await actor.createEmbeddedDocuments('Item', [item.toObject()]);
+        }
+      } catch (e) {
+        console.warn(`${MODULE_ID} | Could not add exploration ability:`, uuid, e);
       }
-
-      const docs = await finder.getDocsFromFolder(exploreFolder.uuid, 'Item');
-      const existingNames = new Set(
-        actor.items.filter(i => i.type === 'specialAbility').map(i => i.name)
-      );
-      const existingSourceIds = new Set(
-        actor.items
-          .filter(i => i.type === 'specialAbility')
-          .flatMap(i => [i.flags?.core?.sourceId, i._stats?.compendiumSource, i.id, i._id])
-          .filter(Boolean)
-          .map(String)
-      );
-
-      const toCreate = [];
-      for (const item of docs) {
-        if (item.type !== 'specialAbility' || item.system?.category !== 'explore') continue;
-        if (existingNames.has(item.name)) continue;
-        if ([...existingSourceIds].some(s => s.includes(item.id))) continue;
-        toCreate.push(item.toObject());
-      }
-
-      if (toCreate.length > 0) {
-        await actor.createEmbeddedDocuments('Item', toCreate);
-      }
-    } catch (e) {
-      console.warn(`${MODULE_ID} | Could not add exploration abilities from folder:`, e);
     }
   }
   
@@ -1371,12 +1330,7 @@ export class PGGenerator {
    * One entry per class key; first occurrence wins (world over pack, matching getClass).
    */
   async _getClassDocuments() {
-    const finder = game.fade?.fadeFinder;
-    if (!finder?.getClassDefinitions) {
-      console.warn(`${MODULE_ID} | fadeFinder.getClassDefinitions unavailable`);
-      return [];
-    }
-    const docs = await finder.getClassDefinitions();
+    const docs = await game.fade.fadeFinder.getClassDefinitions();
     const byKey = new Map();
     for (const doc of docs || []) {
       if (doc?.type !== 'class') continue;
@@ -1390,9 +1344,7 @@ export class PGGenerator {
   /** Find a class by document id via fadeFinder.getClassDefinitions. */
   async _findClassById(classId) {
     if (!classId) return null;
-    const finder = game.fade?.fadeFinder;
-    if (!finder?.getClassDefinitions) return null;
-    const docs = await finder.getClassDefinitions();
+    const docs = await game.fade.fadeFinder.getClassDefinitions();
     return (docs || []).find(c => c.id === classId || c._id === classId) || null;
   }
 
@@ -1400,20 +1352,15 @@ export class PGGenerator {
    * Resolve the class document fadeFinder.getClass would return for prep/sheet mins.
    */
   async _resolveCanonicalClass(classItem) {
-    const finder = game.fade?.fadeFinder;
-    if (!finder?.getClass || !classItem) return classItem;
+    if (!classItem) return classItem;
     const key = getClassKey(classItem);
-    try {
-      if (key) {
-        const byKey = await finder.getClass(null, key);
-        if (byKey) return byKey;
-      }
-      if (classItem.name) {
-        const byName = await finder.getClass(classItem.name);
-        if (byName) return byName;
-      }
-    } catch (e) {
-      console.warn(`${MODULE_ID} | fadeFinder class resolve failed:`, e);
+    if (key) {
+      const byKey = await game.fade.fadeFinder.getClass(null, key);
+      if (byKey) return byKey;
+    }
+    if (classItem.name) {
+      const byName = await game.fade.fadeFinder.getClass(classItem.name);
+      if (byName) return byName;
     }
     return classItem;
   }

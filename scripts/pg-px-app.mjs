@@ -280,14 +280,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async _ensureClassDefinitions(force = false) {
     if (!force && Array.isArray(this.genClassDefinitions)) return this.genClassDefinitions;
 
-    const finder = game.fade?.fadeFinder;
-    if (!finder?.getClassDefinitions) {
-      console.warn(`${MODULE_ID} | fadeFinder.getClassDefinitions unavailable`);
-      this.genClassDefinitions = [];
-      return this.genClassDefinitions;
-    }
-
-    const docs = await finder.getClassDefinitions();
+    const docs = await game.fade.fadeFinder.getClassDefinitions();
     const byKey = new Map();
     for (const doc of docs || []) {
       if (doc?.type !== 'class') continue;
@@ -2396,9 +2389,9 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       await this._ensureClassDefinitions();
       let classItem = this._getClassDefinitionsCached().find(c => c.id === classId || c._id === classId);
       const key = classItem ? getClassKey(classItem) : null;
-      if (key && game.fade?.fadeFinder?.getClass) {
+      if (key) {
         classItem = (await game.fade.fadeFinder.getClass(null, key)) || classItem;
-      } else if (classItem?.name && game.fade?.fadeFinder?.getClass) {
+      } else if (classItem?.name) {
         classItem = (await game.fade.fadeFinder.getClass(classItem.name)) || classItem;
       }
 

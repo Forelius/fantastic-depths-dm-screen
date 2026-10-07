@@ -205,8 +205,6 @@
   "NOTIFY.MacroError": "Error executing macro",
   "NOTIFY.RollTableNotFound": "RollTable not found",
   "NOTIFY.RollTableError": "Error executing roll table",
-  "NOTIFY.FadeAbilityUnavailable": "FaDe abilityCheck unavailable",
-  "NOTIFY.FadeSaveUnavailable": "FaDe savingThrowSystem unavailable",
   "NOTIFY.ExploreAbilityMissing": "Exploration ability not found on actor ({skill})",
   "NOTIFY.ActorMissingClass": "Warning! {name} has no class assigned.",
   "NOTIFY.EncounterGenerationFailed": "Encounter generation failed. See console for details.",

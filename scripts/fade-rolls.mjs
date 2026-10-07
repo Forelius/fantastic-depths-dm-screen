@@ -97,12 +97,7 @@ export function findExploreItem(actor, skillKey) {
  * @param {Event|null} sourceEvent
  */
 export async function rollAbilityCheck(actor, ability, sourceEvent = null) {
-  const abilityCheckSys = game.fade?.registry?.getSystem?.('abilityCheck');
-  if (!abilityCheckSys) {
-    ui.notifications.error(game.i18n.localize('NOTIFY.FadeAbilityUnavailable'));
-    return false;
-  }
-  await abilityCheckSys.execute({
+  await game.fade.registry.getSystem('abilityCheck').execute({
     actor,
     event: createAbilityCheckEvent(ability, sourceEvent)
   });
@@ -116,15 +111,9 @@ export async function rollAbilityCheck(actor, ability, sourceEvent = null) {
  * @param {Event|null} sourceEvent
  */
 export async function rollSavingThrow(actor, saveKey, sourceEvent = null) {
-  const saveType = mapSaveCode(saveKey);
-  const savingThrowSys = game.fade?.registry?.getSystem?.('savingThrowSystem');
-  if (!savingThrowSys || !saveType) {
-    ui.notifications.error(game.i18n.localize('NOTIFY.FadeSaveUnavailable'));
-    return false;
-  }
-  await savingThrowSys.execute({
+  await game.fade.registry.getSystem('savingThrowSystem').execute({
     actor,
-    type: saveType,
+    type: mapSaveCode(saveKey),
     event: createFadeRollEvent(sourceEvent)
   });
   return true;
