@@ -153,7 +153,8 @@ export function getClassTokenImage(key, fallback = 'icons/svg/mystery-man.svg') 
 
 /**
  * Build generator requirements from a FaDe class item (system of record).
- * - min: class.system.abilities.*.min (authored)
+ * Mins are the same fields FaDe copies onto the actor in setupMinAbilityScores
+ * (`classItem.system.abilities.*.min`) — what the sheet uses for red highlighting.
  * - primeReq: unique abilities from class.system.primeReqs
  * - lowerable: module chargen convention (STR/INT/WIS; never CON/CHA/DEX)
  */
@@ -163,11 +164,12 @@ export function buildClassRequirements(classItem) {
 
   const min = {};
   const abilities = classItem.system.abilities || {};
-  for (const abil of ['str', 'int', 'wis', 'dex', 'con', 'cha']) {
-    const m = abilities[abil]?.min;
-    if (m !== null && m !== undefined && Number.isFinite(Number(m))) {
-      min[abil] = Number(m);
-    }
+  // Same enumeration FaDe setupMinAbilityScores uses
+  for (const [abil, data] of Object.entries(abilities)) {
+    const raw = data?.min;
+    if (raw === null || raw === undefined) continue;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 3) min[abil] = n;
   }
 
   const primeReq = [];

@@ -258,21 +258,18 @@ export class PGGenerator {
     // Stats before class pick so random can honor ability minimums
     const finalStats = stats || this._rollStats();
 
-    // Get class item (handle random selection)
+    // Class resolution only via FaDe fadeFinder (same world→pack rules as the sheet)
     let classItem;
     if (classId === '__RANDOM__') {
-      const allClasses = this._getAllClasses();
+      const pool = await this._getClassDocuments();
       const eligibleClasses = [];
-      for (const c of allClasses) {
-        if (!c.compendium) continue;
-        const pack = game.packs.get(c.compendium);
-        const doc = pack ? await pack.getDocument(c.id) : null;
+      for (const doc of pool) {
         // Dragons only when explicitly selected — never via random
         if (!doc || doc.type !== 'class') continue;
         if (isDragon(doc, getClassSpecies(doc)) || /dragon|drago/i.test(doc.name || '')) continue;
         if (requestedLevel != null && !this._classAllowsLevel(doc, requestedLevel)) continue;
         if (heightRace && getRaceGroup(doc) !== heightRace) continue;
-        // Skip classes the rolled/entered stats cannot qualify for (e.g. MY needs DEX 13)
+        // Same mins the sheet uses (abilities.*.min) — skip if stats do not qualify
         if (!this.validateClassRequirements(doc, finalStats).valid) continue;
         eligibleClasses.push(doc);
       }
@@ -290,32 +287,19 @@ export class PGGenerator {
       }
       classItem = eligibleClasses[Math.floor(Math.random() * eligibleClasses.length)];
     } else {
-      // Search in compendiums ONLY (never use world items) - Cerca SOLO nei compendium (non usare mai oggetti del mondo)
-      for (const pack of game.packs) {
-        if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
-          const doc = await pack.getDocument(classId);
-          if (doc && doc.type === 'class') {
-            classItem = doc;
-            break;
-          }
-        }
-      }
+      classItem = await this._findClassById(classId);
     }
     
     if (!classItem || classItem.type !== 'class') {
       ui.notifications.error(game.i18n.localize('NOTIFY.ClassNotFound'));
       return null;
     }
+
+    // Canonicalize through getClass (exact document class prep uses)
+    classItem = await this._resolveCanonicalClass(classItem);
     
     // Evaluate level (support for random/roll formulas)
     const levelNum = await this._evalAsLevel(level, classItem);
-    
-    // Explicit class pick: warn if stats miss minimums (still create)
-    const validation = this.validateClassRequirements(classItem, finalStats);
-    if (!validation.valid) {
-      const issues = validation.issues.join(', ');
-      ui.notifications.warn(game.i18n.format('NOTIFY.ClassRequirements', { issues }));
-    }
     
     // Optional upgrade to a different class item (PA→PAC, AV→AVC) when WIS >= 13
     const classKey = getClassKey(classItem);
@@ -323,24 +307,16 @@ export class PGGenerator {
     const upgradeKey = getCastingUpgradeKey(classKey);
     
     if (upgradeKey && wisScore >= 13) {
-      let castingClass = null;
-      if (game.fade?.fadeFinder?.getClass) {
-        try {
-          castingClass = await game.fade.fadeFinder.getClass(null, upgradeKey);
-        } catch (e) {}
-      }
-      if (!castingClass) {
-        for (const pack of game.packs) {
-          if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
-            const allItems = await pack.getDocuments();
-            castingClass = allItems.find(doc =>
-              doc.type === 'class' && getClassKey(doc) === upgradeKey
-            );
-            if (castingClass) break;
-          }
-        }
-      }
+      const castingClass = await game.fade?.fadeFinder?.getClass?.(null, upgradeKey);
       if (castingClass) classItem = castingClass;
+    }
+
+    // Never create a PC the sheet would mark unqualified (red ability mins)
+    const validation = this.validateClassRequirements(classItem, finalStats);
+    if (!validation.valid) {
+      const issues = validation.issues.join(', ');
+      ui.notifications.error(game.i18n.format('NOTIFY.ClassRequirements', { issues }));
+      return null;
     }
     
     // Determine folder: only Friendly disposition goes into Party/Seguaci folders
@@ -1357,7 +1333,8 @@ export class PGGenerator {
     };
     
     for (const [stat, minValue] of Object.entries(requirements.min || {})) {
-      if (stats[stat] < minValue) {
+      const score = Number(stats[stat]) || 0;
+      if (score < minValue) {
         results.valid = false;
         const statName = game.i18n.localize(statKeys[stat] || stat.toUpperCase());
         results.issues.push(game.i18n.format('NOTIFY.StatMinRequirement', {
@@ -1373,36 +1350,57 @@ export class PGGenerator {
   _getClassRequirements(classItem) {
     return buildClassRequirements(classItem);
   }
-  
-  // Get all classes from world and compendiums - Ottieni tutte le classi dal mondo e compendium
-  _getAllClasses() {
-    let allClasses = [];
-    
-    // From world - Dal mondo
-    const worldClasses = game.items?.contents?.filter(i => i.type === 'class') || [];
-    allClasses.push(...worldClasses);
-    
-    // From compendiums - Dai compendium
-    for (const pack of game.packs) {
-      if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
-        const packClasses = pack.index?.filter(i => i.type === 'class') || [];
-        for (const cls of packClasses) {
-          allClasses.push({
-            id: cls._id || cls.id,
-            name: cls.name,
-            type: 'class',
-            compendium: pack.collection
-          });
-        }
-      }
+
+  /**
+   * Class definitions from fadeFinder.getClassDefinitions (world then pack).
+   * One entry per class key; first occurrence wins (world over pack, matching getClass).
+   */
+  async _getClassDocuments() {
+    const finder = game.fade?.fadeFinder;
+    if (!finder?.getClassDefinitions) {
+      console.warn(`${MODULE_ID} | fadeFinder.getClassDefinitions unavailable`);
+      return [];
     }
-    
-    // Deduplicate by name - Deduplica per nome
-    const uniqueClasses = allClasses.filter((item, index, self) => 
-      index === self.findIndex(i => i.name.toLowerCase().trim() === item.name.toLowerCase().trim())
-    );
-    
-    return uniqueClasses.sort((a, b) => a.name.localeCompare(b.name));
+    const docs = await finder.getClassDefinitions();
+    const byKey = new Map();
+    for (const doc of docs || []) {
+      if (doc?.type !== 'class') continue;
+      const key = getClassKey(doc);
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, doc);
+    }
+    return [...byKey.values()];
+  }
+
+  /** Find a class by document id via fadeFinder.getClassDefinitions. */
+  async _findClassById(classId) {
+    if (!classId) return null;
+    const finder = game.fade?.fadeFinder;
+    if (!finder?.getClassDefinitions) return null;
+    const docs = await finder.getClassDefinitions();
+    return (docs || []).find(c => c.id === classId || c._id === classId) || null;
+  }
+
+  /**
+   * Resolve the class document fadeFinder.getClass would return for prep/sheet mins.
+   */
+  async _resolveCanonicalClass(classItem) {
+    const finder = game.fade?.fadeFinder;
+    if (!finder?.getClass || !classItem) return classItem;
+    const key = getClassKey(classItem);
+    try {
+      if (key) {
+        const byKey = await finder.getClass(null, key);
+        if (byKey) return byKey;
+      }
+      if (classItem.name) {
+        const byName = await finder.getClass(classItem.name);
+        if (byName) return byName;
+      }
+    } catch (e) {
+      console.warn(`${MODULE_ID} | fadeFinder class resolve failed:`, e);
+    }
+    return classItem;
   }
   
   // ==========================================

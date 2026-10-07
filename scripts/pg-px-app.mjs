@@ -100,6 +100,8 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.genCurrentSpecies = null;
     this.genCurrentClassItem = null;
     this.genCurrentClassReqs = null;
+    /** Cached fadeFinder.getClassDefinitions() (one per class key). */
+    this.genClassDefinitions = null;
     
     // Load saved window position
     const savedPosition = localStorage.getItem('fd-ds-position');
@@ -169,6 +171,8 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     context.partyData = this._getPartyData();
     context.awardData = this._getAwardData();
     context.pendingData = this._getPendingData();
+
+    await this._ensureClassDefinitions();
     context.availableClasses = this._getAvailableClasses();
     
     // Generator-specific data
@@ -269,57 +273,51 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     };
   }
   
-  _getAllClasses() {
-    // Get class items from world AND compendiums
-    let allClasses = [];
-    
-    // From world
-    const worldClasses = game.items?.contents?.filter(i => i.type === 'class') || [];
-    allClasses.push(...worldClasses);
-    
-    // From compendiums (use index for better compatibility)
-    for (const pack of game.packs) {
-      if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
-        // Get classes from index (doesn't require loading the pack)
-        const packClasses = pack.index?.filter(i => i.type === 'class') || [];
-        for (const cls of packClasses) {
-          // Create a pseudo-item with id and name from index
-          allClasses.push({
-            id: cls._id || cls.id,
-            name: cls.name,
-            type: 'class',
-            compendium: pack.collection
-          });
-        }
-      }
+  /**
+   * Load class definitions via fadeFinder (world then pack). Cache one doc per class key.
+   */
+  async _ensureClassDefinitions(force = false) {
+    if (!force && Array.isArray(this.genClassDefinitions)) return this.genClassDefinitions;
+
+    const finder = game.fade?.fadeFinder;
+    if (!finder?.getClassDefinitions) {
+      console.warn(`${MODULE_ID} | fadeFinder.getClassDefinitions unavailable`);
+      this.genClassDefinitions = [];
+      return this.genClassDefinitions;
     }
-    
-    // Deduplicate by name (same logic as original macro)
-    const uniqueClasses = allClasses.filter((item, index, self) => 
-      index === self.findIndex(i => i.name.toLowerCase().trim() === item.name.toLowerCase().trim())
+
+    const docs = await finder.getClassDefinitions();
+    const byKey = new Map();
+    for (const doc of docs || []) {
+      if (doc?.type !== 'class') continue;
+      const key = getClassKey(doc);
+      if (!key || byKey.has(key)) continue; // first wins (world over pack)
+      byKey.set(key, doc);
+    }
+    this.genClassDefinitions = [...byKey.values()].sort((a, b) =>
+      (a.name || '').localeCompare(b.name || '')
     );
-    
-    return uniqueClasses.sort((a, b) => a.name.localeCompare(b.name));
+    return this.genClassDefinitions;
+  }
+
+  _getClassDefinitionsCached() {
+    return Array.isArray(this.genClassDefinitions) ? this.genClassDefinitions : [];
   }
   
   _getAvailableClasses() {
-    const classes = this._getAllClasses();
-    return classes.map(c => ({ id: c.id, name: c.name }));
+    return this._getClassDefinitionsCached().map(c => ({ id: c.id, name: c.name }));
   }
   
   _getDragonClasses() {
-    const classes = this._getAllClasses().filter(c => /dragon|drago/i.test(c.name));
-    return classes.map(c => ({ 
-      id: c.id, 
-      name: c.name
-    }));
+    return this._getClassDefinitionsCached()
+      .filter(c => isDragon(c, getClassSpecies(c)) || /dragon|drago/i.test(c.name || ''))
+      .map(c => ({ id: c.id, name: c.name }));
   }
   
   _getNonDragonClasses() {
-    // Dropdown uses localized names for display; exclude dragons by name heuristic on index
-    // (full key/species check happens when the class document is loaded on change/create)
-    const classes = this._getAllClasses().filter(c => !isDragon(c.system?.key, c.system?.species) && !/dragon|drago/i.test(c.name || ''));
-    return classes.map(c => ({ id: c.id, name: c.name }));
+    return this._getClassDefinitionsCached()
+      .filter(c => !isDragon(c, getClassSpecies(c)) && !/dragon|drago/i.test(c.name || ''))
+      .map(c => ({ id: c.id, name: c.name }));
   }
   
   _getClassRequirements() {
@@ -2495,36 +2493,39 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
     
-    // Load class document — requirements/bounds from FaDe class item
+    // Load class document via fadeFinder (same source as chargen / sheet mins)
     let maxLevel = 36;
     let startLevel = 1;
     let classAlignment = 'Any';
     
     try {
-      for (const pack of game.packs) {
-        if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
-          const classItem = await pack.getDocument(classId);
-          if (classItem && classItem.type === 'class') {
-            const classSystem = classItem.system || {};
-            this.genCurrentClassItem = classItem;
-            this.genCurrentClassKey = getClassKey(classItem);
-            this.genCurrentSpecies = getClassSpecies(classItem);
-            this.genCurrentClass = this.genCurrentClassKey;
-            this.genCurrentClassReqs = buildClassRequirements(classItem);
-            classAlignment = classSystem.alignment || 'Any';
-            
-            if (classSystem.maxLevel) {
-              maxLevel = parseInt(classSystem.maxLevel) || 36;
-            } else if (classSystem.levels && Array.isArray(classSystem.levels)) {
-              maxLevel = classSystem.levels.length;
-            }
-            startLevel = Math.max(1, parseInt(classSystem.firstLevel) || 1);
-            break;
-          }
+      await this._ensureClassDefinitions();
+      let classItem = this._getClassDefinitionsCached().find(c => c.id === classId || c._id === classId);
+      const key = classItem ? getClassKey(classItem) : null;
+      if (key && game.fade?.fadeFinder?.getClass) {
+        classItem = (await game.fade.fadeFinder.getClass(null, key)) || classItem;
+      } else if (classItem?.name && game.fade?.fadeFinder?.getClass) {
+        classItem = (await game.fade.fadeFinder.getClass(classItem.name)) || classItem;
+      }
+
+      if (classItem && classItem.type === 'class') {
+        const classSystem = classItem.system || {};
+        this.genCurrentClassItem = classItem;
+        this.genCurrentClassKey = getClassKey(classItem);
+        this.genCurrentSpecies = getClassSpecies(classItem);
+        this.genCurrentClass = this.genCurrentClassKey;
+        this.genCurrentClassReqs = buildClassRequirements(classItem);
+        classAlignment = classSystem.alignment || 'Any';
+
+        if (classSystem.maxLevel) {
+          maxLevel = parseInt(classSystem.maxLevel) || 36;
+        } else if (classSystem.levels && Array.isArray(classSystem.levels)) {
+          maxLevel = classSystem.levels.length;
         }
+        startLevel = Math.max(1, parseInt(classSystem.firstLevel) || 1);
       }
     } catch (err) {
-      console.warn(`${MODULE_ID} | ⚠️ Could not retrieve class maxLevel:`, err);
+      console.warn(`${MODULE_ID} | Could not load class definition:`, err);
     }
     
     // Update level dropdown with correct maxLevel
