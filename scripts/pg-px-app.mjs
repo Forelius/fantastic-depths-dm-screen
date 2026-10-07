@@ -5,6 +5,7 @@
 
 import { executeAcrobaticsCheck } from './acrobatics-check.mjs';
 import { CLASS_EQUIPMENT_KITS } from './pg-generator.mjs';
+import { rollAbilityCheck } from './fade-rolls.mjs';
 import {
   getClassKey,
   getClassSpecies,
@@ -607,92 +608,19 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const actorId = target.dataset.actorId;
     const ability = target.dataset.ability;
     if (!actorId || !ability) return;
-    
+
     const actor = game.actors.get(actorId);
     if (!actor) return;
-    
-    // Map ability abbreviations to localized labels
-    const abilityLabels = {
-      'str': game.i18n.localize('ABILITY.STR'),
-      'dex': game.i18n.localize('ABILITY.DEX'),
-      'con': game.i18n.localize('ABILITY.CON'),
-      'int': game.i18n.localize('ABILITY.INT'),
-      'wis': game.i18n.localize('ABILITY.WIS'),
-      'cha': game.i18n.localize('ABILITY.CHA'),
-      'ac': 'CA'
-    };
-    
-    const abilityLabel = abilityLabels[ability];
-    if (!abilityLabel) return;
-    
+
     try {
       if (ability === 'ac') {
-        // For AC, just show a notification
         const acValue = actor.system?.ac?.value || target.textContent;
         ui.notifications.info(game.i18n.format('NOTIFY.ACOf', { name: actor.name, value: acValue }));
-      } else {
-        const abilityScore = actor.system?.abilities?.[ability]?.value || 0;
-        const difficultyOptions = [
-          { value: 'easy', label: game.i18n.localize('ABILITY.Easy'), bonus: 4 },
-          { value: 'medium', label: game.i18n.localize('ABILITY.Medium'), bonus: 0 },
-          { value: 'hard', label: game.i18n.localize('ABILITY.Hard'), bonus: -4 }
-        ];
-        const difficultyHTML = difficultyOptions.map(d =>
-          `<option value="${d.value}" data-bonus="${d.bonus}" ${d.value === 'medium' ? 'selected' : ''}>${d.label}</option>`
-        ).join('');
-
-        const dialogTitle = game.i18n.format('ABILITY.DialogTitle', { name: actor.name, ability: abilityLabel });
-        const result = await foundry.applications.api.DialogV2.wait({
-          window: { title: dialogTitle },
-          position: { width: 320 },
-          content: `
-            <div style="padding: 8px 4px;">
-              <div style="margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
-                <label style="min-width: 140px;">${game.i18n.localize('ABILITY.RollFormula')}</label>
-                <span>1d20</span>
-              </div>
-              <div style="margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
-                <label style="min-width: 140px;">${game.i18n.localize('ABILITY.Modifier')}</label>
-                <input type="number" id="ability-modifier" value="0" style="width: 70px; text-align: right;">
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <label style="min-width: 140px;">${game.i18n.localize('ABILITY.Difficulty')}</label>
-                <select id="ability-difficulty" style="flex: 1;">${difficultyHTML}</select>
-              </div>
-            </div>`,
-          buttons: [
-            {
-              action: 'roll',
-              label: game.i18n.localize('ABILITY.RollButton'),
-              icon: 'fas fa-dice-d20',
-              default: true,
-              callback: (event, button, dialog) => {
-                const form = button.form ?? dialog;
-                const modifier = parseInt(form.querySelector('#ability-modifier')?.value) || 0;
-                const diffSelect = form.querySelector('#ability-difficulty');
-                const bonus = parseInt(diffSelect?.options[diffSelect.selectedIndex]?.dataset.bonus) || 0;
-                return { modifier, bonus };
-              }
-            }
-          ]
-        });
-
-        if (result) {
-          const { modifier, bonus } = result;
-          const totalMod = modifier + bonus;
-          const formula = totalMod !== 0 ? `1d20${totalMod >= 0 ? '+' : ''}${totalMod}` : '1d20';
-          const roll = new Roll(formula);
-          await roll.evaluate();
-          const success = roll.total <= abilityScore;
-          const successLabel = success ? game.i18n.localize('ABILITY.Success') : game.i18n.localize('ABILITY.Failure');
-          const successText = success ? `<span style="color:#4CAF50;font-weight:bold;">✓ ${successLabel}</span>` : `<span style="color:#F44336;font-weight:bold;">✗ ${successLabel}</span>`;
-          await roll.toMessage({
-            speaker: ChatMessage.getSpeaker({ actor }),
-            flavor: `${abilityLabel} (${abilityScore}) — ${successText} (${roll.total} <= ${abilityScore})`,
-            rollMode: game.settings.get('core', 'messageMode')
-          });
-        }
+        return;
       }
+
+      // FaDe abilityCheck (dialog + userTables difficulty-levels). Ctrl skips dialog.
+      await rollAbilityCheck(actor, ability, event);
     } catch (err) {
       console.error(`${MODULE_ID} | Error rolling ability:`, err);
       ui.notifications.error(game.i18n.format('NOTIFY.RollError', { ability: ability, message: err.message }));
@@ -735,30 +663,13 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
     
-    // Get difficulty and bonus
-    const difficultySelect = this.element.querySelector('#request-difficulty');
-    const difficulty = difficultySelect?.value || 'medium';
-    const difficultyBonusMap = {
-      'easy': -4,
-      'medium': 0,
-      'hard': 4,
-      'veryhard': 8,
-      'absurd': 12
-    };
-    const difficultyBonus = difficultyBonusMap[difficulty] || 0;
-    
-    // Get show DC option
-    const showDC = this.element.querySelector('#request-show-dc')?.checked || false;
-    
-    // Get roll mode from toggle icon
+    // Roll mode from toggle (visibility of the request message itself)
     const rollModeToggle = this.element.querySelector('[data-action="toggleRequestRollMode"]');
     const isPublic = rollModeToggle?.getAttribute('data-public') === 'true';
     const rollMode = isPublic ? 'public' : 'blind';
-    
-    // Get flavour
+
     const flavour = this.element.querySelector('#request-flavour')?.value || '';
-    
-    // Get selected roll types
+
     const selectedRollTypes = Array.from(this.element.querySelectorAll('.request-roll-type:checked'))
       .map(cb => ({
         type: cb.dataset.type,
@@ -767,34 +678,21 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
         skill: cb.dataset.skill,
         roll: cb.dataset.roll
       }));
-    
+
     if (selectedRollTypes.length === 0) {
       ui.notifications.warn(game.i18n.localize('REQUEST.SelectRollType'));
       return;
     }
 
-    // Build roll request message
     const abilityLabelMap = {
-      'str': 'STR',
-      'dex': 'DEX',
-      'int': 'INT',
-      'wis': 'WIS',
-      'con': 'CON',
-      'cha': 'CHA'
+      str: 'STR',
+      dex: 'DEX',
+      int: 'INT',
+      wis: 'WIS',
+      con: 'CON',
+      cha: 'CHA'
     };
 
-    const difficultyLabel = game.i18n.localize(`REQUEST.${difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}`);
-    const difficultyText = showDC ? `${difficultyLabel} (bonus: ${difficultyBonus >= 0 ? '+' : ''}${difficultyBonus})` : `${difficultyLabel} (bonus: ???)`;
-
-    const rollTypesText = selectedRollTypes.map(rt => {
-      if (rt.type === 'ability') return abilityLabelMap[rt.ability] || rt.ability?.toUpperCase();
-      if (rt.type === 'save') return rt.save;
-      if (rt.type === 'exploration') return rt.skill;
-      if (rt.type === 'roll') return rt.roll;
-      return rt.type;
-    }).join(', ');
-
-    // Determine the header text based on the type of roll selected
     let headerText = game.i18n.localize('REQUEST.MsgMultipleRolls');
     if (selectedRollTypes.length > 0) {
       const firstType = selectedRollTypes[0];
@@ -803,20 +701,21 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
         headerText = game.i18n.format('REQUEST.MsgAbilityCheck', { ability: abilityLabel });
       } else if (firstType.type === 'save') {
         const saveKeyMap = {
-          'wand': 'REQUEST.WandSave',
-          'spell': 'REQUEST.SpellSave',
-          'stone': 'REQUEST.PetrificationSave',
-          'breath': 'REQUEST.BreathSave',
-          'death': 'REQUEST.DeathSave'
+          wand: 'REQUEST.WandSave',
+          spell: 'REQUEST.SpellSave',
+          petrification: 'REQUEST.PetrificationSave',
+          stone: 'REQUEST.PetrificationSave',
+          breath: 'REQUEST.BreathSave',
+          death: 'REQUEST.DeathSave'
         };
         const saveLabel = game.i18n.localize(saveKeyMap[firstType.save]) || firstType.save;
         headerText = game.i18n.format('REQUEST.MsgSavingThrow', { save: saveLabel });
       } else if (firstType.type === 'exploration') {
         const skillKeyMap = {
-          'findSecretDoors': 'REQUEST.FindSecretDoors',
-          'forceOpenDoors': 'REQUEST.ForceOpenDoors',
-          'listenAtDoors': 'REQUEST.ListenAtDoors',
-          'findTraps': 'REQUEST.FindTraps'
+          findSecretDoors: 'REQUEST.FindSecretDoors',
+          forceOpenDoors: 'REQUEST.ForceOpenDoors',
+          listenAtDoors: 'REQUEST.ListenAtDoors',
+          findTraps: 'REQUEST.FindTraps'
         };
         const skillLabel = game.i18n.localize(skillKeyMap[firstType.skill]) || firstType.skill;
         headerText = game.i18n.format('REQUEST.MsgExploration', { skill: skillLabel });
@@ -825,9 +724,8 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     const rollModeText = game.i18n.localize(rollMode === 'blind' ? 'REQUEST.MsgBlind' : 'REQUEST.MsgPublic');
     const d20Icon = 'icons/svg/d20-grey.svg';
-    
     const requestId = `roll-request-${Date.now()}`;
-    
+
     const messageContent = `
       <div class="roll-request-message" id="${requestId}">
         <h3>${headerText} ${rollModeText}</h3>
@@ -837,23 +735,19 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
           const actor = this.actors.find(a => a.id === actorId);
           if (!actor) return '';
           return `<div class="roll-request-character" data-actor-id="${actor.id}" data-request-id="${requestId}">
-            <img src="${d20Icon}" class="roll-request-icon" data-action="rollRequest" data-actor-id="${actor.id}" data-request-id="${requestId}" data-difficulty="${difficulty}" data-difficulty-bonus="${difficultyBonus}" data-show-dc="${showDC}" data-roll-mode="${rollMode}" data-roll-types='${JSON.stringify(selectedRollTypes)}' data-flavour="${flavour}">
+            <img src="${d20Icon}" class="roll-request-icon" data-action="rollRequest" data-actor-id="${actor.id}" data-request-id="${requestId}" data-roll-mode="${rollMode}" data-roll-types='${JSON.stringify(selectedRollTypes)}' data-flavour="${flavour}">
             <strong>${actor.name}</strong> (${actor.class})
           </div>`;
         }).join('')}
       </div>
     `;
-    
-    // Send message to chat
-    const speaker = ChatMessage.getSpeaker();
-    const messageData = {
-      speaker: speaker,
+
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker(),
       content: messageContent,
       whisper: rollMode === 'blind' ? [game.user.id] : [],
       blind: rollMode === 'blind'
-    };
-    
-    await ChatMessage.create(messageData);
+    });
     ui.notifications.info(`Richiesta inviata a ${selectedActorIds.length} personaggi`);
   }
 

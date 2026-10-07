@@ -7,7 +7,7 @@
 import { PGPXManagerApp } from './pg-px-app.mjs';
 import { PGGenerator } from './pg-generator.mjs';
 import { PXManager } from './px-manager.mjs';
-import { getClassKey } from './class-keys.mjs';
+import { rollAbilityCheck, rollSavingThrow, rollExploration } from './fade-rolls.mjs';
 
 const MODULE_ID = 'fantastic-depths-dm-screen';
 
@@ -21,284 +21,50 @@ globalThis.combatants = new Set();
 
 // ==========================================
 // Roll Request Handler - Gestore Richieste Tiro
+// Delegates to FaDe registry / item.roll (no invent formulas)
 // ==========================================
 
-async function executeRollRequest(actor, rollType, difficultyBonus, showDC, rollMode, flavour) {
+/**
+ * @param {Actor} actor
+ * @param {{ type: string, ability?: string, save?: string, skill?: string, roll?: string }} rollType
+ * @param {Event|null} sourceEvent
+ * @returns {Promise<{ rolled: boolean }>}
+ */
+async function executeRollRequest(actor, rollType, sourceEvent = null) {
   const { type, ability, save, skill, roll } = rollType;
-  const difficultyText = showDC ? `bonus difficoltà: ${difficultyBonus >= 0 ? '+' : ''}${difficultyBonus}` : 'bonus difficoltà: ???';
-  const flavorText = flavour ? `${flavour} (${difficultyText})` : difficultyText;
-  
-  // Ability abbreviation mapping - Mappa abbreviazioni caratteristiche
-  const abilityLabelMap = {
-    'str': game.i18n.lang === 'it' ? 'FOR' : 'STR',
-    'dex': game.i18n.lang === 'it' ? 'DES' : 'DEX',
-    'int': game.i18n.lang === 'it' ? 'INT' : 'INT',
-    'wis': game.i18n.lang === 'it' ? 'SAG' : 'WIS',
-    'con': game.i18n.lang === 'it' ? 'COS' : 'CON',
-    'cha': game.i18n.lang === 'it' ? 'CAR' : 'CHA'
-  };
-  
+
   try {
     if (type === 'ability' && ability) {
-      // Roll ability check - Success if 1d20 + bonus difficulty <= ability value
-      const abilityData = actor.system?.abilities?.[ability];
-      const abilityValue = abilityData?.value || 0;
-      
-      const formula = `1d20${difficultyBonus >= 0 ? '+' : ''}${difficultyBonus}`;
-      const rollResult = new Roll(formula);
-      await rollResult.evaluate();
-      
-      const success = rollResult.total <= abilityValue;
-      const successText = success ? (game.i18n.lang === 'it' ? 'Successo' : 'Success') : (game.i18n.lang === 'it' ? 'Fallimento' : 'Failed');
-      const successIcon = success ? '<span style="color: #4CAF50; font-weight: bold; font-size: 1.2em;">✓</span>' : '<span style="color: #F44336; font-weight: bold; font-size: 1.2em;">✗</span>';
-      
-      const abilityLabel = abilityLabelMap[ability] || ability.toUpperCase();
-      
-      rollResult.toMessage({
-        speaker: ChatMessage.getSpeaker({ actor }),
-        flavor: `${successIcon} ${abilityLabel} ${formula} - ${successText} (${rollResult.total} <= ${abilityValue})`,
-        rollMode: rollMode
-      });
-      
-      return { success };
-      
-    } else if (type === 'save' && save) {
-      // Roll FaDe saving throw - Success if 1d20 <= save value
-      const saveLabelMap = {
-        'wand': game.i18n.lang === 'it' ? 'Bacchetta' : 'Wand',
-        'spell': game.i18n.lang === 'it' ? 'Incantesimo' : 'Spell',
-        'stone': game.i18n.lang === 'it' ? 'Pietrificazione' : 'Stone',
-        'breath': game.i18n.lang === 'it' ? 'Soffio' : 'Breath',
-        'death': game.i18n.lang === 'it' ? 'Morte' : 'Death'
-      };
-      
-      // Get the save value from the actor's system
-      let saveValue = 0;
-      const saves = actor.system?.saves || {};
-      
-      // Map save names to compendium table keys (compendium uses 'paralysis' instead of 'stone')
-      const saveKeyMap = {
-        'stone': 'paralysis',
-        'petrification': 'paralysis',
-        'paralysis': 'paralysis',
-        'wand': 'wand',
-        'spell': 'spell',
-        'breath': 'breath',
-        'death': 'death'
-      };
-      const compendiumSaveKey = saveKeyMap[save] || save;
-      
-      // Map save names to display labels (for flavor text)
-      const saveDisplayMap = {
-        'stone': game.i18n.lang === 'it' ? 'Pietrificazione' : 'Stone',
-        'petrification': game.i18n.lang === 'it' ? 'Pietrificazione' : 'Stone',
-        'paralysis': game.i18n.lang === 'it' ? 'Pietrificazione' : 'Stone',
-        'wand': game.i18n.lang === 'it' ? 'Bacchetta' : 'Wand',
-        'spell': game.i18n.lang === 'it' ? 'Incantesimo' : 'Spell',
-        'breath': game.i18n.lang === 'it' ? 'Soffio' : 'Breath',
-        'death': game.i18n.lang === 'it' ? 'Morte' : 'Death'
-      };
-      const saveDisplayLabel = saveDisplayMap[save] || save;
-      
-      // Try to find save value in savesSpecialAbilityItems
-      if (saveValue === 0 && actor.savesSpecialAbilityItems) {
-        const saveItem = actor.savesSpecialAbilityItems.find(i => 
-          i.system?.save === save || i.system?.save === compendiumSaveKey ||
-          i.system?.type === save || i.system?.type === compendiumSaveKey ||
-          i.name?.toLowerCase().includes(save) || i.name?.toLowerCase().includes(compendiumSaveKey)
-        );
-        if (saveItem) {
-          saveValue = saveItem.system?.target || saveItem.system?.value || saveItem.system?.bonus || saveItem.system?.mod || 0;
-        }
-      }
-      
-      // Try to find save value from class in compendium
-      if (saveValue === 0) {
-        const classKey = getClassKey(
-          actor.system?.details?.classKey
-          || actor.items.find(i => i.type === 'class')
-        );
-        const level = actor.system?.details?.level;
-        
-        if (classKey && level) {
-          // Resolve class item by non-localized system.key
-          let classItem = actor.items.find(i => i.type === 'class' && getClassKey(i) === classKey) || null;
-          
-          if (!classItem) {
-            classItem = game.items.find(i => i.type === 'class' && getClassKey(i) === classKey) || null;
-          }
-          
-          if (!classItem) {
-            for (const pack of game.packs.filter(p => p.documentName === 'Item')) {
-              await pack.getIndex();
-              const classEntries = pack.index.filter(i => i.type === 'class');
-              for (const entry of classEntries) {
-                const doc = await pack.getDocument(entry._id);
-                if (doc && getClassKey(doc) === classKey) {
-                  classItem = doc;
-                  break;
-                }
-              }
-              if (classItem) break;
-            }
-          }
-          
-          if (classItem) {
-            // Look for saves table in class item
-            const savesTable = classItem.system?.saves || classItem.system?.savingThrows;
-            if (savesTable) {
-              if (Array.isArray(savesTable)) {
-                // Find the element with the lowest level that is >= character level
-                let levelData = null;
-                let lowestLevel = Infinity;
-                for (const entry of savesTable) {
-                  if (entry.level && entry.level >= level && entry.level < lowestLevel) {
-                    lowestLevel = entry.level;
-                    levelData = entry;
-                  }
-                }
-                if (levelData) {
-                  // Try to find save value in the level data
-                  if (levelData[compendiumSaveKey] !== undefined) {
-                    saveValue = levelData[compendiumSaveKey];
-                  }
-                }
-              }
-              // Try to find save value for the specific save and level
-              if (typeof savesTable === 'object' && !Array.isArray(savesTable)) {
-                const levelData = savesTable[level] || savesTable[String(level)];
-                if (levelData && levelData[compendiumSaveKey] !== undefined) {
-                  saveValue = levelData[compendiumSaveKey];
-                } else if (savesTable[compendiumSaveKey] !== undefined) {
-                  saveValue = savesTable[compendiumSaveKey];
-                }
-              }
-            }
-          }
-        }
-      }
-      
-      // Try to find save value in other possible locations
-      if (saveValue === 0) {
-        const details = actor.system?.details || {};
-        if (details[save] !== undefined) {
-          saveValue = typeof details[save] === 'number' ? details[save] : details[save].value || details[save].bonus || details[save].mod || 0;
-        }
-      }
-      
-      if (saveValue === 0) {
-        const combat = actor.system?.combat || {};
-        if (combat[save] !== undefined) {
-          saveValue = typeof combat[save] === 'number' ? combat[save] : combat[save].value || combat[save].bonus || combat[save].mod || 0;
-        }
-      }
-      
-      // Try to find save value in mod
-      if (saveValue === 0) {
-        const mod = actor.system?.mod || {};
-        if (mod.save && mod.save[save] !== undefined) {
-          saveValue = typeof mod.save[save] === 'number' ? mod.save[save] : mod.save[save].value || mod.save[save].bonus || mod.save[save].mod || 0;
-        }
-      }
-      
-      // Try to find save value in items (special abilities)
-      if (saveValue === 0) {
-        const items = actor.items?.contents || actor.items || [];
-        const saveItems = items.filter(i => i.system?.category === 'saves' || i.type === 'save' || i.name?.toLowerCase().includes(save));
-        
-        for (const item of saveItems) {
-          if (item.system?.value !== undefined) {
-            saveValue = item.system.value;
-            break;
-          } else if (item.system?.bonus !== undefined) {
-            saveValue = item.system.bonus;
-            break;
-          } else if (item.system?.mod !== undefined) {
-            saveValue = item.system.mod;
-            break;
-          }
-        }
-      }
-      
-      
-      const formula = '1d20';
-      const rollResult = new Roll(formula);
-      await rollResult.evaluate();
-      
-      const success = rollResult.total >= saveValue;
-      const successText = success ? (game.i18n.lang === 'it' ? 'Successo' : 'Success') : (game.i18n.lang === 'it' ? 'Fallimento' : 'Failed');
-      const successIcon = success ? '<span style="color: #4CAF50; font-weight: bold; font-size: 1.2em;">✓</span>' : '<span style="color: #F44336; font-weight: bold; font-size: 1.2em;">✗</span>';
-      
-      rollResult.toMessage({
-        speaker: ChatMessage.getSpeaker({ actor }),
-        flavor: `${successIcon} ${saveDisplayLabel} ${formula} - ${successText} (${rollResult.total} >= ${saveValue})`,
-        rollMode: rollMode
-      });
-      
-      return { success };
-      
-    } else if (type === 'exploration' && skill) {
-      // Roll exploration skill (FaDe specific skills) - Success if 1d6 satisfies skill formula
-      const skillLabelMap = {
-        'findSecretDoors': game.i18n.lang === 'it' ? 'Porte Segrete' : 'Find Secret Doors',
-        'forceOpenDoors': game.i18n.lang === 'it' ? 'Forzare Porte' : 'Force Open Doors',
-        'listenAtDoors': game.i18n.lang === 'it' ? 'Origliare Porte' : 'Listen at Doors',
-        'findTraps': game.i18n.lang === 'it' ? 'Scoprire Trappole' : 'Find Traps'
-      };
-      
-      // Map skill keys to Italian item names for better matching
-      const skillNameMap = {
-        'findSecretDoors': ['Porte Segrete', 'Detect Secret Door'],
-        'forceOpenDoors': ['Forzare Porte', 'Open Door'],
-        'listenAtDoors': ['Origliare Porte', 'Listen Door'],
-        'findTraps': ['Scoprire Trappole', 'Find Trap']
-      };
-      
-      // Get the skill value from actor items
-      let skillValue = 0;
-      const possibleNames = skillNameMap[skill] || [skill];
-      const skillItem = actor.items.find(i =>
-        i.system?.skill === skill || 
-        possibleNames.some(name => i.name?.toLowerCase().includes(name.toLowerCase()))
-      );
-      if (skillItem) {
-        skillValue = skillItem.system?.target || skillItem.system?.value || skillItem.system?.bonus || skillItem.system?.mod || 0;
-      }
-      
-      const formula = '1d6';
-      const rollResult = new Roll(formula);
-      await rollResult.evaluate();
-      
-      const success = rollResult.total <= skillValue;
-      const successText = success ? (game.i18n.lang === 'it' ? 'Successo' : 'Success') : (game.i18n.lang === 'it' ? 'Fallimento' : 'Failed');
-      const successIcon = success ? '<span style="color: #4CAF50; font-weight: bold; font-size: 1.2em;">✓</span>' : '<span style="color: #F44336; font-weight: bold; font-size: 1.2em;">✗</span>';
-      
-      rollResult.toMessage({
-        speaker: ChatMessage.getSpeaker({ actor }),
-        flavor: `${successIcon} ${skillLabelMap[skill] || skill} ${formula} - ${successText} (${rollResult.total} <= ${skillValue})`,
-        rollMode: rollMode
-      });
-      
-      return { success };
-      
-    } else if (type === 'roll' && roll) {
-      // Generic roll type
-      const formula = '1d20';
-      const rollResult = new Roll(formula);
-      await rollResult.evaluate();
-      
-      rollResult.toMessage({
-        speaker: ChatMessage.getSpeaker({ actor }),
-        flavor: `🎲 ${roll.toUpperCase()} ${formula} - ${rollResult.total}`,
-        rollMode: rollMode
-      });
-      
-      return { success: true };
+      const ok = await rollAbilityCheck(actor, ability, sourceEvent);
+      return { rolled: ok };
     }
+
+    if (type === 'save' && save) {
+      const ok = await rollSavingThrow(actor, save, sourceEvent);
+      return { rolled: ok };
+    }
+
+    if (type === 'exploration' && skill) {
+      const ok = await rollExploration(actor, skill, sourceEvent);
+      return { rolled: ok };
+    }
+
+    if (type === 'roll' && roll) {
+      const formula = '1d20';
+      const rollResult = new Roll(formula);
+      await rollResult.evaluate();
+      rollResult.toMessage({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        flavor: `${roll.toUpperCase()} ${formula} - ${rollResult.total}`
+      });
+      return { rolled: true };
+    }
+
+    return { rolled: false };
   } catch (err) {
     console.error('[fantastic-depths-dm-screen] Error executing roll request:', err);
     ui.notifications.error(game.i18n.lang === 'it' ? 'Errore nell\'esecuzione del tiro' : 'Error executing roll');
-    return { success: false };
+    return { rolled: false };
   }
 }
 
@@ -420,12 +186,12 @@ Hooks.once('init', () => {
 
 });
 
-// Helper: update roll-request chat message with result icon (runs on GM side)
-async function updateRollRequestMessage(requestId, actorId, success) {
-  const successIcon = success 
-    ? '<span class="roll-result-icon" style="color: #4CAF50; font-weight: bold; font-size: 1.2em; margin-left: 10px;">✓</span>' 
+// Helper: mark roll-request row as completed (FaDe chat carries pass/fail)
+async function updateRollRequestMessage(requestId, actorId, rolled) {
+  const resultIcon = rolled
+    ? '<span class="roll-result-icon" style="color: #ffd93d; font-weight: bold; font-size: 1.2em; margin-left: 10px;" title="Rolled">●</span>'
     : '<span class="roll-result-icon" style="color: #F44336; font-weight: bold; font-size: 1.2em; margin-left: 10px;">✗</span>';
-  
+
   const chatMessage = game.messages.contents.find(m => m.content?.includes(requestId));
   if (chatMessage) {
     const $content = $(`<div>${chatMessage.content}</div>`);
@@ -433,7 +199,7 @@ async function updateRollRequestMessage(requestId, actorId, success) {
     if ($char.length > 0) {
       $char.find('.roll-request-icon').remove();
       $char.find('.roll-result-icon').remove();
-      $char.append(successIcon);
+      $char.append(resultIcon);
       await chatMessage.update({ content: $content.html() });
     }
   }
@@ -540,11 +306,10 @@ Hooks.once('ready', () => {
     const flagData = chatMessage.getFlag(MODULE_ID, 'rollResult');
     if (!flagData) return;
     
-    const { requestId, actorId, success } = chatMessage.flags[MODULE_ID];
-    
-    // Update the original request message
-    await updateRollRequestMessage(requestId, actorId, success);
-    
+    const { requestId, actorId, rolled, success } = chatMessage.flags[MODULE_ID];
+    // rolled preferred; legacy whispers used success
+    await updateRollRequestMessage(requestId, actorId, rolled ?? success);
+
     // Delete the whisper message to keep chat clean
     await chatMessage.delete();
   });
@@ -571,9 +336,6 @@ Hooks.once('ready', () => {
       return;
     }
     
-    const difficultyBonus = parseInt($icon.data('difficulty-bonus')) || 0;
-    const showDC = $icon.data('show-dc') === 'true';
-    const rollMode = $icon.data('roll-mode') || 'public';
     const requestId = $icon.data('request-id');
     let rollTypes = $icon.data('roll-types');
     // Handle both string JSON and object
@@ -582,34 +344,29 @@ Hooks.once('ready', () => {
     } else {
       rollTypes = rollTypes || [];
     }
-    const flavour = $icon.data('flavour') || '';
-    
+
     if (!actor) {
       ui.notifications.error('Actor not found');
       return;
     }
-    
-    // Execute rolls for each selected type and track success
-    let overallSuccess = false;
+
+    // FaDe systems own difficulty / formulas / chat; Ctrl skips FaDe dialogs
+    let anyRolled = false;
     for (const rollType of rollTypes) {
-      const result = await executeRollRequest(actor, rollType, difficultyBonus, showDC, rollMode, flavour);
-      if (result.success) overallSuccess = true;
+      const result = await executeRollRequest(actor, rollType, e.originalEvent || e);
+      if (result.rolled) anyRolled = true;
     }
-    
-    // Update the roll-request-character in the request message with success/failure icon
-    // and persist the change in the ChatMessage database so it survives F5/reload
+
+    // Mark request row as completed (pass/fail lives in FaDe chat messages)
     if (requestId) {
       if (game.user.isGM) {
-        // GM can update content directly
-        await updateRollRequestMessage(requestId, actorId, overallSuccess);
+        await updateRollRequestMessage(requestId, actorId, anyRolled);
       } else {
-        // Player creates a hidden whisper message to GM with the roll result data
-        // GM intercepts it via createChatMessage hook and updates the request message
         const gmUsers = game.users.filter(u => u.isGM).map(u => u.id);
         await ChatMessage.create({
-          content: `<div class="fd-ds-roll-result" data-request-id="${requestId}" data-actor-id="${actorId}" data-success="${overallSuccess}" style="display:none;"></div>`,
+          content: `<div class="fd-ds-roll-result" data-request-id="${requestId}" data-actor-id="${actorId}" data-rolled="${anyRolled}" style="display:none;"></div>`,
           whisper: gmUsers,
-          flags: { [MODULE_ID]: { rollResult: true, requestId, actorId, success: overallSuccess } }
+          flags: { [MODULE_ID]: { rollResult: true, requestId, actorId, rolled: anyRolled } }
         });
       }
     }
