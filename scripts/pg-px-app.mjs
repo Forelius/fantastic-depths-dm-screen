@@ -659,7 +659,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       .map(cb => cb.dataset.actorId);
     
     if (selectedActorIds.length === 0) {
-      ui.notifications.warn('Nessun personaggio selezionato');
+      ui.notifications.warn(game.i18n.localize('REQUEST.NoCharactersSelected'));
       return;
     }
     
@@ -748,7 +748,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       whisper: rollMode === 'blind' ? [game.user.id] : [],
       blind: rollMode === 'blind'
     });
-    ui.notifications.info(`Richiesta inviata a ${selectedActorIds.length} personaggi`);
+    ui.notifications.info(game.i18n.format('REQUEST.SentToCount', { count: selectedActorIds.length }));
   }
 
   static async _onToggleChatVisibility(event, target) {
@@ -1068,7 +1068,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     } catch (e) {
       console.error(`${MODULE_ID} | Encounter generation error:`, e);
       if (genBtn) { genBtn.disabled = false; genBtn.textContent = game.i18n.localize('ENCOUNTER.GenerateBtn'); }
-      ui.notifications.error('Encounter generation failed. See console for details.');
+      ui.notifications.error(game.i18n.localize('NOTIFY.EncounterGenerationFailed'));
     }
   }
 
@@ -1965,7 +1965,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (game.fade?.registry?.getSystem('wrestling')?.showWrestlingDialog) {
       game.fade.registry.getSystem('wrestling').showWrestlingDialog();
     } else {
-      ui.notifications.warn('Wrestling system not available.');
+      ui.notifications.warn(game.i18n.localize('NOTIFY.WrestlingUnavailable'));
     }
   }
   
@@ -1974,7 +1974,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (game.fade?.registry?.getSystem('shove')?.showShoveDialog) {
       game.fade.registry.getSystem('shove').showShoveDialog();
     } else {
-      ui.notifications.warn('Shove system not available.');
+      ui.notifications.warn(game.i18n.localize('NOTIFY.ShoveUnavailable'));
     }
   }
   
@@ -1993,7 +1993,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (game.fade?.LightManager?.showLightDialog) {
       game.fade.LightManager.showLightDialog();
     } else {
-      ui.notifications.warn('Light Manager not available.');
+      ui.notifications.warn(game.i18n.localize('NOTIFY.LightManagerUnavailable'));
     }
   }
   

@@ -65,5 +65,8 @@ export async function executeAcrobaticsCheck() {
     rollMode: game.settings.get("core", "messageMode")
   });
 
-  console.log(`${actor.name} | d100: ${rollTotal} | Obiettivo: ${target} | ${isSuccess ? "Successo" : "Fallimento"}`);
+  const resultLabel = isSuccess
+    ? game.i18n.localize('ABILITY.Success')
+    : game.i18n.localize('ABILITY.Failure');
+  console.log(`${actor.name} | d100: ${rollTotal} | target: ${target} | ${resultLabel}`);
 }

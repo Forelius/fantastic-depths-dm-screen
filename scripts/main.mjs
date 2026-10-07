@@ -63,7 +63,7 @@ async function executeRollRequest(actor, rollType, sourceEvent = null) {
     return { rolled: false };
   } catch (err) {
     console.error('[fantastic-depths-dm-screen] Error executing roll request:', err);
-    ui.notifications.error(game.i18n.lang === 'it' ? 'Errore nell\'esecuzione del tiro' : 'Error executing roll');
+    ui.notifications.error(game.i18n.localize('NOTIFY.RollRequestError'));
     return { rolled: false };
   }
 }
@@ -346,7 +346,7 @@ Hooks.once('ready', () => {
     }
 
     if (!actor) {
-      ui.notifications.error('Actor not found');
+      ui.notifications.error(game.i18n.localize('NOTIFY.ActorNotFound'));
       return;
     }
 
@@ -402,8 +402,6 @@ Hooks.once('ready', () => {
         const uuid = treasureLink.dataset.uuid;
         if (!uuid) return;
         
-        const lang = game.i18n.lang;
-        
         console.log(`[${MODULE_ID}] Treasure link clicked: ${uuid}`);
         
         try {
@@ -413,11 +411,11 @@ Hooks.once('ready', () => {
             console.log(`[${MODULE_ID}] Macro executed successfully`);
           } else {
             console.error(`[${MODULE_ID}] Could not find document with UUID: ${uuid}`);
-            ui.notifications.error(lang === 'it' ? 'Macro non trovata' : 'Macro not found');
+            ui.notifications.error(game.i18n.localize('NOTIFY.MacroNotFound'));
           }
         } catch (err) {
           console.error('[fantastic-depths-dm-screen] Error executing macro:', err);
-          ui.notifications.error(lang === 'it' ? 'Errore nell\'esecuzione della macro' : 'Error executing macro');
+          ui.notifications.error(game.i18n.localize('NOTIFY.MacroError'));
         }
         return;
       }
@@ -446,11 +444,11 @@ Hooks.once('ready', () => {
             console.log(`[${MODULE_ID}] RollTable drawn successfully`);
           } else {
             console.error(`[${MODULE_ID}] Could not find table with UUID: ${uuid}`);
-            ui.notifications.error('RollTable not found');
+            ui.notifications.error(game.i18n.localize('NOTIFY.RollTableNotFound'));
           }
         } catch (err) {
           console.error('[fantastic-depths-dm-screen] Error executing roll-table:', err);
-          ui.notifications.error('Errore nell\'esecuzione della roll-table');
+          ui.notifications.error(game.i18n.localize('NOTIFY.RollTableError'));
         } finally {
           // Reset processing flag after a short delay
           setTimeout(() => {
@@ -1052,8 +1050,8 @@ async function createTreasureLinksChatMessage(treasureLinks, monsterNames) {
 function registerSettings() {
   // Pending XP storage (per character) - Archiviazione PX in attesa (per personaggio)
   game.settings.register(MODULE_ID, 'pendingXP', {
-    name: 'PX in Attesa',
-    hint: 'Storage per i PX in attesa dei personaggi',
+    name: 'SETTINGS.PendingXP.Name',
+    hint: 'SETTINGS.PendingXP.Hint',
     scope: 'world',
     config: false,
     type: Object,
@@ -1062,8 +1060,8 @@ function registerSettings() {
   
   // Global XP storage (total XP from combat) - Archiviazione PX globale (PX totali dal combattimento)
   game.settings.register(MODULE_ID, 'globalXP', {
-    name: 'XP Globale',
-    hint: 'XP totale del combattimento corrente',
+    name: 'SETTINGS.GlobalXP.Name',
+    hint: 'SETTINGS.GlobalXP.Hint',
     scope: 'world',
     config: false,
     type: Number,
@@ -1072,17 +1070,17 @@ function registerSettings() {
   
   // Default tab - Tab predefinita
   game.settings.register(MODULE_ID, 'defaultTab', {
-    name: 'Tab Predefinito',
-    hint: 'Tab aperta di default all\'avvio',
+    name: 'SETTINGS.DefaultTab.Name',
+    hint: 'SETTINGS.DefaultTab.Hint',
     scope: 'client',
     config: true,
     restricted: true,
     type: String,
     choices: {
-      'party': '🎭 Party',
-      'award': '💰 Assegna PX',
-      'pending': '⏳ PX in Attesa',
-      'generator': '⚔️ Genera PG'
+      party: 'SETTINGS.DefaultTab.Party',
+      award: 'SETTINGS.DefaultTab.Award',
+      pending: 'SETTINGS.DefaultTab.Pending',
+      generator: 'SETTINGS.DefaultTab.Generator'
     },
     default: 'party'
   });
@@ -1157,28 +1155,28 @@ async function preloadTemplates() {
 
 // Ensure Party and Seguaci/Retainers folders exist - Assicura che le cartelle Party e Seguaci/Retainers esistano
 async function ensureFolders() {
-  const isItalian = (game.i18n.lang ?? 'en') === 'it';
-  const retainerFolderName = isItalian ? 'Seguaci' : 'Retainers';
+  const partyFolderName = game.i18n.localize('FOLDER.Party');
+  const retainerFolderName = game.i18n.localize('FOLDER.Retainers');
 
-  // Party folder
-  let partyFolder = game.folders?.find(f => 
-    f.type === 'Actor' && f.name.toLowerCase() === 'party'
+  // Party folder (match either localized or English name)
+  let partyFolder = game.folders?.find(f =>
+    f.type === 'Actor' && /^(party)$/i.test(f.name)
   );
-  
+
   if (!partyFolder && game.user.isGM) {
     partyFolder = await Folder.create({
-      name: 'Party',
+      name: partyFolderName,
       type: 'Actor',
       parent: null
     });
-    ui.notifications.info(game.i18n.format('NOTIFY.FolderCreated', { name: 'Party' }));
+    ui.notifications.info(game.i18n.format('NOTIFY.FolderCreated', { name: partyFolderName }));
   }
-  
+
   // Retainers/Seguaci folder
-  let seguaciFolder = game.folders?.find(f => 
+  let seguaciFolder = game.folders?.find(f =>
     f.type === 'Actor' && /^(seguaci|retainers)$/i.test(f.name)
   );
-  
+
   console.log(`[fantastic-depths-dm-screen] ensureFolders | lang=${game.i18n.lang} | targetName=${retainerFolderName} | found=${seguaciFolder?.name ?? 'NONE'} | isGM=${game.user.isGM}`);
 
   if (!seguaciFolder && game.user.isGM) {

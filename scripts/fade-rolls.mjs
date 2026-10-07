@@ -99,9 +99,7 @@ export function findExploreItem(actor, skillKey) {
 export async function rollAbilityCheck(actor, ability, sourceEvent = null) {
   const abilityCheckSys = game.fade?.registry?.getSystem?.('abilityCheck');
   if (!abilityCheckSys) {
-    ui.notifications.error(game.i18n.lang === 'it'
-      ? 'Sistema abilityCheck FaDe non disponibile'
-      : 'FaDe abilityCheck unavailable');
+    ui.notifications.error(game.i18n.localize('NOTIFY.FadeAbilityUnavailable'));
     return false;
   }
   await abilityCheckSys.execute({
@@ -121,9 +119,7 @@ export async function rollSavingThrow(actor, saveKey, sourceEvent = null) {
   const saveType = mapSaveCode(saveKey);
   const savingThrowSys = game.fade?.registry?.getSystem?.('savingThrowSystem');
   if (!savingThrowSys || !saveType) {
-    ui.notifications.error(game.i18n.lang === 'it'
-      ? 'Sistema savingThrowSystem FaDe non disponibile'
-      : 'FaDe savingThrowSystem unavailable');
+    ui.notifications.error(game.i18n.localize('NOTIFY.FadeSaveUnavailable'));
     return false;
   }
   await savingThrowSys.execute({
@@ -143,10 +139,7 @@ export async function rollSavingThrow(actor, saveKey, sourceEvent = null) {
 export async function rollExploration(actor, skillKey, sourceEvent = null) {
   const item = findExploreItem(actor, skillKey);
   if (!item) {
-    const msg = game.i18n.lang === 'it'
-      ? `Abilità di esplorazione non trovata sull'attore (${skillKey})`
-      : `Exploration ability not found on actor (${skillKey})`;
-    ui.notifications.warn(msg);
+    ui.notifications.warn(game.i18n.format('NOTIFY.ExploreAbilityMissing', { skill: skillKey }));
     return false;
   }
   const event = createFadeRollEvent(sourceEvent);
