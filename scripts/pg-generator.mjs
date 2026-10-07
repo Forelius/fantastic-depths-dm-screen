@@ -28,16 +28,8 @@ import {
   isDemihuman
 } from './class-keys.mjs';
 
-/** Paladin / Paladin (C) / Avenger / Avenger (C) — four distinct FaDe class keys. */
-const PALADIN_AVENGER_KEYS = new Set(['PA', 'PAC', 'AV', 'AVC']);
-
-// UUIDs for exploration abilities - UUID per abilità di esplorazione
-const EXPLORATION_ABILITIES = [
-  'Compendium.fade-compendiums.item-compendium.Item.akgcSVIh27fXqbVW',
-  'Compendium.fade-compendiums.item-compendium.Item.nPZLQJzGQ7b0g665',
-  'Compendium.fade-compendiums.item-compendium.Item.qTQsTNYfcHpEki7V',
-  'Compendium.fade-compendiums.item-compendium.Item.BDFBtg7fOKRvlzbd'
-];
+/** Pack folder id for base exploration special abilities (not per-item UUIDs). */
+const EXPLORATION_FOLDER_ID = 'SSodW6IBMU8TbVXq';
 
 // Fixed items added to all characters - Oggetti fissi aggiunti a tutti i personaggi
 const FIXED_ITEMS = [
@@ -377,17 +369,9 @@ export class PGGenerator {
       // __NONE__ = no equipment
       
       await this._addExplorationAbilities(actor);
-      
-      // Detect Evil only if FaDe class abilities did not already grant it
-      if (PALADIN_AVENGER_KEYS.has(getClassKey(classItem))) {
-        const hasDetectEvil = actor.items.some(i => {
-          if (i.type !== 'spell') return false;
-          const n = i.name || '';
-          return /detect\s*evil/i.test(n) || /individuazione.*male/i.test(n);
-        });
-        if (!hasDetectEvil) await this._addDetectEvilSpell(actor);
-      }
-      
+
+      // Detect Evil (PA)/(AV) comes from FaDe class specialAbilities via _applyClassViaFade
+
       ui.notifications.info(game.i18n.format('GENERATOR.Success', { name: finalName, level: levelNum }));
       return actor;
     } catch (err) {
@@ -1293,22 +1277,52 @@ export class PGGenerator {
     
   }
   
-  // Add exploration abilities - Aggiungi abilità esplorazione
+  /**
+   * Add base exploration specialAbilities from the FaDe Exploration folder.
+   * Skips items the actor already has (e.g. class-granted explore abilities).
+   */
   async _addExplorationAbilities(actor) {
-    // Get existing ability names to avoid duplicates - Ottieni nomi abilità esistenti per evitare duplicati
-    const existingAbilities = actor.items.filter(i => i.type === 'specialAbility').map(i => i.name);
-    
-    for (const uuid of EXPLORATION_ABILITIES) {
-      try {
-        const item = await fromUuid(uuid);
-        if (item) {
-          // Skip if actor already has this ability - Salta se l'attore ha già questa abilità
-          if (existingAbilities.includes(item.name)) continue;
-          await actor.createEmbeddedDocuments('Item', [item.toObject()]);
-        }
-      } catch (e) {
-        console.warn(`${MODULE_ID} | Could not add exploration ability:`, uuid, e);
+    const finder = game.fade?.fadeFinder;
+    if (!finder?.getFolders || !finder?.getDocsFromFolder) {
+      console.warn(`${MODULE_ID} | fadeFinder folder APIs unavailable; skipping exploration abilities`);
+      return;
+    }
+
+    try {
+      const folders = await finder.getFolders('Item');
+      const exploreFolder = folders.find(f =>
+        f.id === EXPLORATION_FOLDER_ID || f.name === 'Exploration'
+      );
+      if (!exploreFolder) {
+        console.warn(`${MODULE_ID} | Exploration folder not found`);
+        return;
       }
+
+      const docs = await finder.getDocsFromFolder(exploreFolder.uuid, 'Item');
+      const existingNames = new Set(
+        actor.items.filter(i => i.type === 'specialAbility').map(i => i.name)
+      );
+      const existingSourceIds = new Set(
+        actor.items
+          .filter(i => i.type === 'specialAbility')
+          .flatMap(i => [i.flags?.core?.sourceId, i._stats?.compendiumSource, i.id, i._id])
+          .filter(Boolean)
+          .map(String)
+      );
+
+      const toCreate = [];
+      for (const item of docs) {
+        if (item.type !== 'specialAbility' || item.system?.category !== 'explore') continue;
+        if (existingNames.has(item.name)) continue;
+        if ([...existingSourceIds].some(s => s.includes(item.id))) continue;
+        toCreate.push(item.toObject());
+      }
+
+      if (toCreate.length > 0) {
+        await actor.createEmbeddedDocuments('Item', toCreate);
+      }
+    } catch (e) {
+      console.warn(`${MODULE_ID} | Could not add exploration abilities from folder:`, e);
     }
   }
   
@@ -1456,16 +1470,4 @@ export class PGGenerator {
     }
   }
   
-  // Add Detect Evil spell for Paladin and Avenger (default spell)
-  async _addDetectEvilSpell(actor) {
-    const detectEvilUuid = 'Compendium.fade-compendiums.item-compendium.Item.evcGalskzeP10Rk5';
-    try {
-      const spell = await fromUuid(detectEvilUuid);
-      if (spell) {
-        await actor.createEmbeddedDocuments('Item', [spell.toObject()]);
-      }
-    } catch (err) {
-      console.warn(`${MODULE_ID} | Could not add Detect Evil spell:`, err);
-    }
-  }
 }
