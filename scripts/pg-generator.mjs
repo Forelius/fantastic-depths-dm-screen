@@ -347,15 +347,15 @@ export class PGGenerator {
     
     // Generate random values (name by species, not localized class name)
     const finalName = name || await this._generateName(getClassSpecies(classItem), finalSex);
-    // Handle alignment: __RANDOM_MISTIC__ = 75% Lawful, 12.5% Neutral, 12.5% Chaotic
+    // FaDe stores English alignment tokens; localize only for display
     let finalAlignment;
     if (alignment === '__RANDOM_MISTIC__') {
       const roll = Math.random();
-      if (roll < 0.75) finalAlignment = game.i18n.localize('ALIGNMENT.Lawful');
-      else if (roll < 0.875) finalAlignment = game.i18n.localize('ALIGNMENT.Neutral');
-      else finalAlignment = game.i18n.localize('ALIGNMENT.Chaotic');
+      if (roll < 0.75) finalAlignment = 'Lawful';
+      else if (roll < 0.875) finalAlignment = 'Neutral';
+      else finalAlignment = 'Chaotic';
     } else {
-      finalAlignment = alignment || this._rollAlignment();
+      finalAlignment = this._normalizeAlignment(alignment) || this._rollAlignment();
     }
     
     // Prepare items array including class item first
@@ -506,8 +506,11 @@ export class PGGenerator {
       displayHeight = this._convertHeightToCm(finalHeight);
     }
 
-    // Determine movement based on unit system (36 for metric, 120 for imperial) - Determina movimento basato su sistema unità (36 per metrico, 120 per imperiale)
-    const movementBase = useMetric ? 36 : 120;
+    // Imperial base from FaDe encumbrance CONFIG; metric is module overlay
+    const imperialMaxMove = CONFIG.FADE?.Encumbrance?.Expert?.maxMove
+      ?? CONFIG.FADE?.Encumbrance?.Basic?.maxMove
+      ?? 120;
+    const movementBase = useMetric ? 36 : imperialMaxMove;
     const movementSystem = game.fade?.registry?.getSystem?.('actorMovement');
     const movementMode = movementSystem?.createDefaultMode
       ? movementSystem.createDefaultMode('ground', { base: movementBase, turn: movementBase })
@@ -522,9 +525,10 @@ export class PGGenerator {
                        [...levels].reverse().find(l => l.level <= level) || 
                        levels[0] || { hd: '1d8' };
     const hdStr = levelEntry.hd || '1d8';
+    const applyConToHd = levelEntry.hdcon !== false;
     
-    // Calculate HP with con mod for level 1, roll for higher levels - Calcola PF con mod CON per livello 1, tira per livelli superiori
-    const conMod = this._getConHpMod(stats.con);
+    // CON HP mod from FaDe abilityScore user tables (respects abilityScoreMods setting)
+    const conMod = applyConToHd ? this._getAbilityMod('con', stats.con) : 0;
     let hpTotal;
     if (level === 1) {
       const hdMatch = hdStr.match(/(\d+)d(\d+)/i);
@@ -537,6 +541,9 @@ export class PGGenerator {
     } else {
       hpTotal = this._rollHPForLevel(hdStr, level, conMod);
     }
+    
+    const nakedAC = CONFIG.FADE?.Armor?.acNaked ?? 9;
+    const baseTHAC0 = CONFIG.FADE?.ToHit?.baseTHAC0 ?? 19;
     
     // Calculate XP values - Calcola valori PX
     const { xpCurrent, xpNext } = this._getLevelXP(levelEntry, level, classSystem);
@@ -570,7 +577,7 @@ export class PGGenerator {
       abilityBlock[abil] = {
         value: score,
         total: score,
-        mod: 0,
+        mod: this._getAbilityMod(abil, score),
         tempMod: 0,
         min: (minScore !== null && minScore !== undefined) ? Number(minScore) || 1 : 1
       };
@@ -619,11 +626,11 @@ export class PGGenerator {
           hd: hdStr
         },
         ac: {
-          base: 10,
-          total: 10
+          base: nakedAC,
+          total: nakedAC
         },
         abilities: abilityBlock,
-        thac0: { value: levelEntry?.thac0 || classSystem.thac0 || 19 },
+        thac0: { value: levelEntry?.thac0 || classSystem.thac0 || baseTHAC0 },
         movement: {
           modifiers: { encumbrance: 1 },
           modes: [movementMode]
@@ -693,28 +700,40 @@ export class PGGenerator {
     return Number(classItem?.system?.maxSpellLevel || classItem?.system?.spells?.maxSpellLevel || 0);
   }
 
-  // Get XP values for level - Ottieni valori PX per livello
+  // XP from class levels only (no invented progression table)
   _getLevelXP(levelEntry, level, classSystem) {
     let xpCurrent = 0;
-    let xpNext = classSystem.xpNextLevel || 2000;
+    let xpNext = 0;
     
     if (levelEntry) {
       xpCurrent = levelEntry.xp || 0;
-      // Find next level XP
-      const nextLevelEntry = classSystem.levels?.find(l => l.level === level + 1);
-      xpNext = nextLevelEntry?.xp || (xpCurrent + 2000);
+    }
+    const nextLevelEntry = classSystem.levels?.find(l => l.level === level + 1);
+    if (nextLevelEntry?.xp != null) {
+      xpNext = nextLevelEntry.xp;
     }
     
     return { xpCurrent, xpNext };
   }
 
-  // Calculate HP modifier from CON - Calcola modificatore PF da CON
-  _getConHpMod(con) {
-    if (con >= 15) return 2;
-    if (con >= 12) return 1;
-    if (con >= 9) return 0;
-    if (con >= 6) return -1;
-    return -2;
+  /**
+   * Ability score modifier from FaDe abilityScore + userTables (ability-mods-* setting).
+   */
+  _getAbilityMod(abilityKey, score) {
+    const abilityScoreSys = game.fade?.registry?.getSystem?.('abilityScore');
+    if (abilityScoreSys?.getAdjustments) {
+      const adjustments = abilityScoreSys.getAdjustments(abilityKey) || [];
+      const total = Number(score) || 0;
+      const sorted = [...adjustments].sort((a, b) => b.min - a.min);
+      const adjustment = sorted.find(item => total >= item.min) ?? sorted[0];
+      return adjustment ? Number(adjustment.value) || 0 : 0;
+    }
+    // Last-resort BX-like fallback if registry unavailable
+    if (score >= 16) return 2;
+    if (score >= 13) return 1;
+    if (score <= 5) return -2;
+    if (score <= 8) return -1;
+    return 0;
   }
 
   // Roll HP for level > 1 - Tira PF per livello > 1
@@ -908,25 +927,29 @@ export class PGGenerator {
     return total;
   }
   
+  /** English FaDe alignment tokens only. */
   _rollAlignment() {
-    const alignments = [
-      game.i18n.localize('ALIGNMENT.Lawful'),
-      game.i18n.localize('ALIGNMENT.Neutral'),
-      game.i18n.localize('ALIGNMENT.Chaotic')
-    ];
+    const alignments = ['Lawful', 'Neutral', 'Chaotic'];
     return alignments[Math.floor(Math.random() * alignments.length)];
   }
+
+  /** Map legacy localized / mixed values to FaDe English tokens. */
+  _normalizeAlignment(value) {
+    if (!value || value === '__RANDOM__') return null;
+    const map = {
+      Lawful: 'Lawful',
+      Neutral: 'Neutral',
+      Chaotic: 'Chaotic',
+      Legale: 'Lawful',
+      Neutrale: 'Neutral',
+      Caotico: 'Chaotic'
+    };
+    return map[value] || null;
+  }
+
   async _generateName(speciesOrClass, sex) {
     // Name tables keyed by species (Human/Elf/Dwarf/Halfling), not localized class name
     return generateName(speciesOrClass, sex);
-  }
-
-  _getAbilityBonus(score) {
-    if (score >= 16) return 2;
-    if (score >= 13) return 1;
-    if (score <= 5) return -2;
-    if (score <= 8) return -1;
-    return 0;
   }
   
   _getTokenImage(classKey) {

@@ -428,20 +428,10 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     
     const currentXP = parseInt(details.xp?.value) || 0;
-
-    // Use system-provided xp.next if available and meaningful (> 0)
+    // Only use FaDe/class-provided xp.next — no invented progression table
     const xpNext = parseInt(details.xp?.next) || 0;
-    if (xpNext > 0) {
-      const missing = xpNext - currentXP - pendingXP;
-      return missing > 0 ? missing : 0;
-    }
-    
-    // Fallback: XP table for standard classes (OSE/BX progression)
-    const level = details.level || 1;
-    const xpTable = [0, 2000, 4000, 8000, 16000, 32000, 64000, 120000, 240000, 360000, 480000, 600000, 720000, 840000, 960000, 1080000, 1200000, 1320000, 1440000, 1560000, 1680000];
-    
-    const xpForNextLevel = xpTable[level] || 0;
-    const missing = xpForNextLevel - currentXP - pendingXP;
+    if (!(xpNext > 0)) return 0;
+    const missing = xpNext - currentXP - pendingXP;
     return missing > 0 ? missing : 0;
   }
   
@@ -449,11 +439,8 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!className || className === '-') return false;
     const currentXP = parseInt(details.xp?.value) || 0;
     const xpNext = parseInt(details.xp?.next) || 0;
-    if (xpNext > 0) return (currentXP + pendingXP) >= xpNext;
-    const level = parseInt(details.level) || 1;
-    const xpTable = [0, 2000, 4000, 8000, 16000, 32000, 64000, 120000, 240000, 360000, 480000, 600000, 720000, 840000, 960000, 1080000, 1200000, 1320000, 1440000, 1560000, 1680000];
-    const xpForNextLevel = xpTable[level] || 0;
-    return xpForNextLevel > 0 && (currentXP + pendingXP) >= xpForNextLevel;
+    if (!(xpNext > 0)) return false;
+    return (currentXP + pendingXP) >= xpNext;
   }
 
   _loadPendingXP() {
