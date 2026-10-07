@@ -7,6 +7,7 @@
 import { PGPXManagerApp } from './pg-px-app.mjs';
 import { PGGenerator } from './pg-generator.mjs';
 import { PXManager } from './px-manager.mjs';
+import { getClassKey } from './class-keys.mjs';
 
 const MODULE_ID = 'fantastic-depths-dm-screen';
 
@@ -113,62 +114,28 @@ async function executeRollRequest(actor, rollType, difficultyBonus, showDC, roll
       
       // Try to find save value from class in compendium
       if (saveValue === 0) {
-        const characterClass = actor.system?.details?.class;
+        const classKey = getClassKey(
+          actor.system?.details?.classKey
+          || actor.items.find(i => i.type === 'class')
+        );
         const level = actor.system?.details?.level;
         
-        if (characterClass && level) {
-          // Class name mapping for Italian/English (bidirectional)
-          const classNameMap = {
-            'Mago': 'Magic-User',
-            'Magic-User': 'Mago',
-            'Guerriero': 'Fighter',
-            'Fighter': 'Guerriero',
-            'Chierico': 'Cleric',
-            'Cleric': 'Chierico',
-            'Ladro': 'Thief',
-            'Thief': 'Ladro',
-            'Elfo': 'Elf',
-            'Elf': 'Elfo',
-            'Nano': 'Dwarf',
-            'Dwarf': 'Nano',
-            'Halfling': 'Halfling',
-            'Bardo': 'Bard',
-            'Bard': 'Bardo',
-            'Druido': 'Druid',
-            'Druid': 'Druido',
-            'Mistico': 'Mystic',
-            'Mystic': 'Mistico',
-            'Paladino': 'Paladin',
-            'Paladin': 'Paladino',
-            'Vendicatore': 'Avenger',
-            'Avenger': 'Vendicatore',
-            'Paladino (C)': 'Paladin (C)',
-            'Vendicatore (C)': 'Avenger (C)'
-          };
+        if (classKey && level) {
+          // Resolve class item by non-localized system.key
+          let classItem = actor.items.find(i => i.type === 'class' && getClassKey(i) === classKey) || null;
           
-          // Get both Italian and English class names
-          const classNames = [characterClass];
-          if (classNameMap[characterClass]) {
-            classNames.push(classNameMap[characterClass]);
+          if (!classItem) {
+            classItem = game.items.find(i => i.type === 'class' && getClassKey(i) === classKey) || null;
           }
           
-          // Search for class item in compendium
-          let classItem = null;
-          
-          // Try to find in world items first
-          for (const className of classNames) {
-            classItem = game.items.find(i => i.name === className && i.type === 'class');
-            if (classItem) break;
-          }
-          
-          // If not found in world, try compendiums
           if (!classItem) {
             for (const pack of game.packs.filter(p => p.documentName === 'Item')) {
               await pack.getIndex();
-              for (const className of classNames) {
-                const entry = pack.index.find(i => i.name === className && i.type === 'class');
-                if (entry) {
-                  classItem = await pack.getDocument(entry._id);
+              const classEntries = pack.index.filter(i => i.type === 'class');
+              for (const entry of classEntries) {
+                const doc = await pack.getDocument(entry._id);
+                if (doc && getClassKey(doc) === classKey) {
+                  classItem = doc;
                   break;
                 }
               }

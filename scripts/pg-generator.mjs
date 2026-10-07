@@ -6,10 +6,32 @@
 const MODULE_ID = 'fantastic-depths-dm-screen';
 
 // Import name generation from embedded data tables - Importa generazione nomi da tabelle dati incorporate
-import { generateHumanName, generateElfName, generateHalflingName, generateDwarfName, generateName } from './name-tables.mjs';
+import { generateName } from './name-tables.mjs';
 
 // Import equipment tables from embedded data - Importa tabelle equipaggiamento da dati incorporati
 import { EQUIPMENT_TABLES, rollOnTable } from './equipment-tables.mjs';
+
+import {
+  getClassKey,
+  getClassSpecies,
+  getRaceGroup,
+  getCastingUpgradeKey,
+  buildClassRequirements,
+  getEquipmentKit,
+  getClassTokenImage,
+  toAbilityValues,
+  isDruid,
+  isFighter,
+  isMagicUser,
+  isElf,
+  isDwarf,
+  isHalfling,
+  isDragon,
+  isDemihuman
+} from './class-keys.mjs';
+
+/** Paladin / Paladin (C) / Avenger / Avenger (C) — four distinct FaDe class keys. */
+const PALADIN_AVENGER_KEYS = new Set(['PA', 'PAC', 'AV', 'AVC']);
 
 // UUIDs for exploration abilities - UUID per abilità di esplorazione
 const EXPLORATION_ABILITIES = [
@@ -72,159 +94,137 @@ const HEIGHT_WEIGHT_TABLES = {
   }
 };
 
-// Class-specific equipment kits (from original PG al Volo macro) - Kit equipaggiamento specifici per classe (dalla macro originale PG al Volo)
-const CLASS_EQUIPMENT_KITS = {
-  'Bardo': {
+/**
+ * Optional starting kits keyed by FaDe class system.key.
+ * Any class without an entry still generates fine — just no kit overlay.
+ */
+export const CLASS_EQUIPMENT_KITS = {
+  B: {
     fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.wfea742tl5e0bxLw', qty: 1 }, // Attrezzi da scasso
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.fllzf2TGXt1KEs5F', qty: 1 }, // Penna
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.rSvhFj4XuO1ihVIk', qty: 1 }, // Inchiostro
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.c3K7FQMsMFqwELcl', qty: 3 }  // Carta
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.wfea742tl5e0bxLw', qty: 1 },
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.fllzf2TGXt1KEs5F', qty: 1 },
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.rSvhFj4XuO1ihVIk', qty: 1 },
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.c3K7FQMsMFqwELcl', qty: 3 }
     ],
     randomTables: [
-      { tableId: '9Pk4ckAUhNdSZeoo', qty: 1 }, // Tabella strumento musicale
-      { tableId: 'qefII3Zunz8Gvg7t', qty: 1 }, // Tabella armature bardo
-      { tableId: 'YOfTRPFY6iTK7UWY', qty: 1 }, // Tabella armi bardo
-      { tableId: 'TheqtiqB1nviHVGm', qty: '1d6' } // Tabella Bardo oggetti extra
+      { tableId: '9Pk4ckAUhNdSZeoo', qty: 1 },
+      { tableId: 'qefII3Zunz8Gvg7t', qty: 1 },
+      { tableId: 'YOfTRPFY6iTK7UWY', qty: 1 },
+      { tableId: 'TheqtiqB1nviHVGm', qty: '1d6' }
     ]
   },
-  'Chierico': {
+  C: {
     fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.YHUTAI2L3mwrX3LF', qty: 1 } // Simbolo sacro
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.YHUTAI2L3mwrX3LF', qty: 1 }
     ],
     randomTables: [
-      { tableId: 'dcqtCjWpj9srykEE', qty: 1 }, // Tabella Chierico Armi
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
+      { tableId: 'dcqtCjWpj9srykEE', qty: 1 },
+      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
     ]
   },
-  'Druido': {
+  DR: {
     fixed: [],
     randomTables: [
-      { tableId: 'cS7vWrh4LvNPMqD7', qty: 1 }, // Tabella Druido Armi
-      { tableId: '9vWUsej1rMUDuF65', qty: 1 }, // Tabella Druido Armatura (SOLO cuoio)
-      { tableId: 'Rd2WQagbBWCD3zOb', qty: '1d6' } // Tabella Druido Oggetti Extra
+      { tableId: 'cS7vWrh4LvNPMqD7', qty: 1 },
+      { tableId: '9vWUsej1rMUDuF65', qty: 1 },
+      { tableId: 'Rd2WQagbBWCD3zOb', qty: '1d6' }
     ]
   },
-  'Elfo': {
+  E: {
     fixed: [],
     randomTables: [
-      { tableId: 'aATDPX9vntwYIhxO', qty: 1 }, // Tabella Armi Elfo
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'aUxhhOhaOaANMlWB', qty: '1d6' } // Tabella Elfo oggetti extra
+      { tableId: 'aATDPX9vntwYIhxO', qty: 1 },
+      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+      { tableId: 'aUxhhOhaOaANMlWB', qty: '1d6' }
     ]
   },
-  'Guerriero': {
+  F: {
     fixed: [],
     randomTables: [
-      { tableId: 'c9UmJwIBRLwEttlh', qty: 1 }, // Tabella Armi Guerriero
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
+      { tableId: 'c9UmJwIBRLwEttlh', qty: 1 },
+      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
     ]
   },
-  'Halfling': {
+  H: {
     fixed: [],
     randomTables: [
-      { tableId: 'WVxgQJiPM5TOqnzo', qty: 1 }, // Tabella Armi Halfling
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
+      { tableId: 'WVxgQJiPM5TOqnzo', qty: 1 },
+      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
     ]
   },
-  'Ladro': {
+  T: {
     fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.wfea742tl5e0bxLw', qty: 1 } // Attrezzi da scasso
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.wfea742tl5e0bxLw', qty: 1 }
     ],
     randomTables: [
-      { tableId: '473Z4vxNmPPCQHsb', qty: 1 }, // Tabella Armi Ladro
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
+      { tableId: '473Z4vxNmPPCQHsb', qty: 1 },
+      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
     ]
   },
-  'Mago': {
+  M: {
     fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.fllzf2TGXt1KEs5F', qty: 1 }, // Penna
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.rSvhFj4XuO1ihVIk', qty: 1 }, // Inchiostro
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.c3K7FQMsMFqwELcl', qty: 3 }  // Carta
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.fllzf2TGXt1KEs5F', qty: 1 },
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.rSvhFj4XuO1ihVIk', qty: 1 },
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.c3K7FQMsMFqwELcl', qty: 3 }
     ],
     randomTables: [
-      { tableId: 'zz6imLGmyofZaXfb', qty: 1 }, // Tabella Armi Mago
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
+      { tableId: 'zz6imLGmyofZaXfb', qty: 1 },
+      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
     ]
   },
-  'Mistico': {
+  MY: {
     fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.A4nQHbJt1qy5ByzL', qty: 1 }, // Bastone ferrato
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.M3tlcSo9qIaqTad9', qty: 1 }  // Colpo senz'armi
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.A4nQHbJt1qy5ByzL', qty: 1 },
+      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.M3tlcSo9qIaqTad9', qty: 1 }
     ],
     randomTables: [
-      { tableId: 'Bj10PzlLeaD98oUL', qty: '1d2' } // Tabella Mistico Oggetti Extra
+      { tableId: 'Bj10PzlLeaD98oUL', qty: '1d2' }
     ]
   },
-  'Nano': {
+  D: {
     fixed: [],
     randomTables: [
-      { tableId: 'QvZzndSGsXUZ1Js1', qty: 1 }, // Tabella Armi Nano
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
+      { tableId: 'QvZzndSGsXUZ1Js1', qty: 1 },
+      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
     ]
   },
-  'Paladino': {
-    fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.YHUTAI2L3mwrX3LF', qty: 1 } // Simbolo sacro
-    ],
-    randomTables: [
-      { tableId: 'c9UmJwIBRLwEttlh', qty: 1 }, // Tabella Armi Guerriero (condivisa)
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
-    ]
-  },
-  'Vendicatore': {
-    fixed: [
-      { uuid: 'Compendium.fade-compendiums.item-compendium.Item.YHUTAI2L3mwrX3LF', qty: 1 } // Simbolo sacro
-    ],
-    randomTables: [
-      { tableId: 'c9UmJwIBRLwEttlh', qty: 1 }, // Tabella Armi Guerriero (condivisa)
-      { tableId: 'hEBnXuAZl6ZialtA', qty: 1 }, // Tabella Armature
-      { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' } // Tabella oggetti extra
-    ]
-  }
 };
+
+// Shared kit objects assigned to each class key that uses them (one key → one entry)
+const PALADIN_KIT = {
+  fixed: [
+    { uuid: 'Compendium.fade-compendiums.item-compendium.Item.YHUTAI2L3mwrX3LF', qty: 1 }
+  ],
+  randomTables: [
+    { tableId: 'c9UmJwIBRLwEttlh', qty: 1 },
+    { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+    { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
+  ]
+};
+CLASS_EQUIPMENT_KITS.PA = PALADIN_KIT;
+CLASS_EQUIPMENT_KITS.PAC = PALADIN_KIT;
+
+const AVENGER_KIT = {
+  fixed: [
+    { uuid: 'Compendium.fade-compendiums.item-compendium.Item.YHUTAI2L3mwrX3LF', qty: 1 }
+  ],
+  randomTables: [
+    { tableId: 'c9UmJwIBRLwEttlh', qty: 1 },
+    { tableId: 'hEBnXuAZl6ZialtA', qty: 1 },
+    { tableId: 'KO8OFvtVeXujoaWL', qty: '1d6' }
+  ]
+};
+CLASS_EQUIPMENT_KITS.AV = AVENGER_KIT;
+CLASS_EQUIPMENT_KITS.AVC = AVENGER_KIT;
 
 export class PGGenerator {
   
   constructor() {
-    this.classTokenImages = {
-      'druido': 'systems/fantastic-depths/assets/img/actor/cleric1a.webp',
-      'druid': 'systems/fantastic-depths/assets/img/actor/cleric1a.webp',
-      'chierico': 'systems/fantastic-depths/assets/img/actor/cleric2a.webp',
-      'cleric': 'systems/fantastic-depths/assets/img/actor/cleric2a.webp',
-      'nano': 'systems/fantastic-depths/assets/img/actor/dwarf1a.webp',
-      'dwarf': 'systems/fantastic-depths/assets/img/actor/dwarf1a.webp',
-      'elfo': 'systems/fantastic-depths/assets/img/actor/elf1a.webp',
-      'elf': 'systems/fantastic-depths/assets/img/actor/elf1a.webp',
-      'guerriero': 'systems/fantastic-depths/assets/img/actor/fighter1a.webp',
-      'fighter': 'systems/fantastic-depths/assets/img/actor/fighter1a.webp',
-      'halfling': 'systems/fantastic-depths/assets/img/actor/halfling1a.webp',
-      'paladino': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'paladino (c)': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'paladin': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'paladin (c)': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'vendicatore': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'vendicatore (c)': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'avenger': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'avenger (c)': 'systems/fantastic-depths/assets/img/actor/hero1.webp',
-      'drago': 'systems/fantastic-depths/assets/img/actor/monster1a.webp',
-      'dragon': 'systems/fantastic-depths/assets/img/actor/monster1a.webp',
-      'ladro': 'systems/fantastic-depths/assets/img/actor/rogue1a.webp',
-      'rogue': 'systems/fantastic-depths/assets/img/actor/rogue1a.webp',
-      'thief': 'systems/fantastic-depths/assets/img/actor/rogue1a.webp',
-      'mistico': 'systems/fantastic-depths/assets/img/actor/rogue2a.webp',
-      'mystic': 'systems/fantastic-depths/assets/img/actor/rogue2a.webp',
-      'mago': 'systems/fantastic-depths/assets/img/actor/wizard1a.webp',
-      'magic-user': 'systems/fantastic-depths/assets/img/actor/wizard1a.webp',
-      'bardo': 'systems/fantastic-depths/assets/img/actor/fighter1a.webp'
-    };
-    
     this.defaultImg = 'icons/svg/mystery-man.svg';
     
     // Equipment tables mapping (UUIDs will need to be configured per world)
@@ -265,17 +265,20 @@ export class PGGenerator {
     let classItem;
     if (classId === '__RANDOM__') {
       const allClasses = this._getAllClasses();
-      const nonDragonClasses = allClasses.filter(c => !/dragon|drago/i.test(c.name));
+      const nonDragonClasses = [];
+      for (const c of allClasses) {
+        if (!c.compendium) continue;
+        const pack = game.packs.get(c.compendium);
+        const doc = pack ? await pack.getDocument(c.id) : null;
+        if (doc?.type === 'class' && !isDragon(doc, getClassSpecies(doc))) {
+          nonDragonClasses.push(doc);
+        }
+      }
       if (nonDragonClasses.length === 0) {
         ui.notifications.error(game.i18n.localize('NOTIFY.NoRandomClasses'));
         return null;
       }
-      const randomClass = nonDragonClasses[Math.floor(Math.random() * nonDragonClasses.length)];
-      // Get full item from compendium ONLY
-      if (randomClass.compendium) {
-        const pack = game.packs.get(randomClass.compendium);
-        classItem = pack ? await pack.getDocument(randomClass.id) : null;
-      }
+      classItem = nonDragonClasses[Math.floor(Math.random() * nonDragonClasses.length)];
     } else {
       // Search in compendiums ONLY (never use world items) - Cerca SOLO nei compendium (non usare mai oggetti del mondo)
       for (const pack of game.packs) {
@@ -299,33 +302,36 @@ export class PGGenerator {
     
     // Validate class requirements
     const finalStats = stats || this._rollStats();
-    const validation = this.validateClassRequirements(classItem.name, finalStats);
+    const validation = this.validateClassRequirements(classItem, finalStats);
     if (!validation.valid) {
       const issues = validation.issues.join(', ');
       ui.notifications.warn(game.i18n.format('NOTIFY.ClassRequirements', { issues }));
     }
     
-    // Special handling for Paladin/Avenger: use (C) variant if WIS >= 13
-    const classNameLower = (classItem.name || '').toLowerCase();
-    const isPaladinOrAvenger = /paladino|paladin|vendicatore|avenger/.test(classNameLower);
+    // Optional upgrade to a different class item (PA→PAC, AV→AVC) when WIS >= 13
+    const classKey = getClassKey(classItem);
     const wisScore = Number(finalStats?.wis) || 0;
+    const upgradeKey = getCastingUpgradeKey(classKey);
     
-    if (isPaladinOrAvenger && wisScore >= 13) {
-      // Look for (C) variant in same compendium
-      const castingClassName = classItem.name + ' (C)';
-      // Search for (C) variant in compendiums
-      for (const pack of game.packs) {
-        if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
-          const allItems = await pack.getDocuments();
-          const castingClass = allItems.find(doc => 
-            doc.type === 'class' && doc.name === castingClassName
-          );
-          if (castingClass) {
-            classItem = castingClass;
-            break;
+    if (upgradeKey && wisScore >= 13) {
+      let castingClass = null;
+      if (game.fade?.fadeFinder?.getClass) {
+        try {
+          castingClass = await game.fade.fadeFinder.getClass(null, upgradeKey);
+        } catch (e) {}
+      }
+      if (!castingClass) {
+        for (const pack of game.packs) {
+          if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
+            const allItems = await pack.getDocuments();
+            castingClass = allItems.find(doc =>
+              doc.type === 'class' && getClassKey(doc) === upgradeKey
+            );
+            if (castingClass) break;
           }
         }
       }
+      if (castingClass) classItem = castingClass;
     }
     
     // Determine folder: only Friendly disposition goes into Party/Seguaci folders
@@ -339,8 +345,8 @@ export class PGGenerator {
     // Determine sex for name generation (random if not specified)
     const finalSex = sex || (Math.random() < 0.5 ? 'M' : 'F');
     
-    // Generate random values
-    const finalName = name || await this._generateName(classItem.name, finalSex);
+    // Generate random values (name by species, not localized class name)
+    const finalName = name || await this._generateName(getClassSpecies(classItem), finalSex);
     // Handle alignment: __RANDOM_MISTIC__ = 75% Lawful, 12.5% Neutral, 12.5% Chaotic
     let finalAlignment;
     if (alignment === '__RANDOM_MISTIC__') {
@@ -356,8 +362,6 @@ export class PGGenerator {
     const items = [];
     if (classItem) {
       const classItemData = classItem.toObject();
-      const classNameLower = (classItem.name || '').toLowerCase();
-      const isPaladin = /paladino|paladin/.test(classNameLower);
       const maxSpellLevel = classItem.system?.spells?.maxSpellLevel || classItem.system?.maxSpellLevel || 0;
 
       // Always ensure spells structure exists to prevent ClassSystem._prepareSpellLevels crash
@@ -370,12 +374,6 @@ export class PGGenerator {
         };
       }
 
-      // Special handling for Paladin level 9+ - ensure spell slot for Detect Evil
-      if (isPaladin && levelNum >= 9 && !classItemData.system.spells.maxSpellLevel) {
-        classItemData.system.spells.maxSpellLevel = 1;
-        classItemData.system.spells.spellSlots = [{ level: 1, slots: 1 }];
-      }
-      
       items.push(classItemData);
     }
     
@@ -404,7 +402,7 @@ export class PGGenerator {
       
       // Add items based on equipment choice
       if (equipment === '__CLASS_KIT__') {
-        await this._addClassKitEquipment(actor, classItem.name, levelNum);
+        await this._addClassKitEquipment(actor, classItem, levelNum);
       } else if (equipment === '__RANDOM__') {
         await this._addRandomEquipment(actor);
       } else if (equipment === '__GOLD_START__') {
@@ -417,9 +415,8 @@ export class PGGenerator {
       await this._addExplorationAbilities(actor);
       await this._addSavingThrows(actor, classItem, levelNum);
       
-      // Add Detect Evil spell for Paladin and Avenger (default spell)
-      const classNameLower = (classItem?.name || '').toLowerCase();
-      if (/paladino|paladin|vendicatore|avenger/.test(classNameLower)) {
+      // Detect Evil for specific class keys (each is its own FaDe class item)
+      if (PALADIN_AVENGER_KEYS.has(getClassKey(classItem))) {
         await this._addDetectEvilSpell(actor);
       }
       
@@ -435,25 +432,10 @@ export class PGGenerator {
   // Evaluate level input (number, dice roll, or random)
   async _evalAsLevel(input, classItem) {
     const raw = String(input ?? '').trim();
-    const className = (classItem?.name || '').toLowerCase();
-    const isDragon = /dragon|drago/.test(className);
-    const isHalfling = /halfling|mezzuomo/.test(className);
-    const isElf = /elf|elfo/.test(className);
-    const isDwarf = /dwarf|nano/.test(className);
-    const isMystic = /mystic|mistico/.test(className);
-    const isSpecialClass = /paladin|vendicatore|druido/.test(className);
-    
-    // Determine max level based on class
-    let maxLevel = 36;
-    if (isDragon) maxLevel = 3;
-    else if (isHalfling) maxLevel = 18;
-    else if (isElf) maxLevel = 20;
-    else if (isDwarf) maxLevel = 22;
-    else if (isMystic) maxLevel = 16;
-    
-    // Determine min level
-    let minLevel = 1;
-    if (isSpecialClass) minLevel = 9;
+    const classSystem = classItem?.system || {};
+    // Prefer authored class bounds over name-based heuristics
+    const maxLevel = Math.max(1, Number(classSystem.maxLevel) || 36);
+    const minLevel = Math.max(1, Number(classSystem.firstLevel) || 1);
     
     // Empty or "__RANDOM__" = random
     if (!raw || raw === '__RANDOM__') {
@@ -482,17 +464,15 @@ export class PGGenerator {
   _buildActorData({ name, classItem, alignment, stats, level = 1, isRetainer, folder, sex, height, disposition = 1 }) {
     const className = classItem.name;
     const classSystem = classItem.system || {};
-    const classNameLower = className.toLowerCase();
+    const classKey = getClassKey(classItem);
+    const species = getClassSpecies(classItem);
     
     // Determine sex (random if not specified) - Determina sesso (casuale se non specificato)
     const finalSex = sex || (Math.random() < 0.5 ? 'M' : 'F');
     const sexLabel = finalSex === 'M' ? game.i18n.localize('CHAT.Male') : game.i18n.localize('CHAT.Female');
     
-    // Determine race from class - Determina razza dalla classe
-    let race = 'human';
-    if (/nano|dwarf/.test(classNameLower)) race = 'dwarf';
-    else if (/elfo|elf/.test(classNameLower)) race = 'elf';
-    else if (/halfling/.test(classNameLower)) race = 'halfling';
+    // Race / height table from non-localized species
+    const race = getRaceGroup(classItem);
     
     // Get height and weight from tables - Ottieni altezza e peso dalle tabelle
     const raceTable = HEIGHT_WEIGHT_TABLES[race];
@@ -517,8 +497,8 @@ export class PGGenerator {
       weight = raceTable.weights[finalSex][randomIndex];
     }
     
-    // Check if using metric system based on language - Controlla se usa sistema metrico basato sulla lingua
-    const useMetric = game.i18n.lang === 'it';
+    // Unit system from module setting (defaults from language on first load)
+    const useMetric = game.settings.get(MODULE_ID, 'useMetric');
 
     // Convert height to cm if using metric system - Converti altezza in cm se usa sistema metrico
     let displayHeight = finalHeight;
@@ -527,17 +507,14 @@ export class PGGenerator {
     }
 
     // Determine movement based on unit system (36 for metric, 120 for imperial) - Determina movimento basato su sistema unità (36 per metrico, 120 per imperiale)
-    const movementMax = useMetric ? 36 : 120;
+    const movementBase = useMetric ? 36 : 120;
+    const movementSystem = game.fade?.registry?.getSystem?.('actorMovement');
+    const movementMode = movementSystem?.createDefaultMode
+      ? movementSystem.createDefaultMode('ground', { base: movementBase, turn: movementBase })
+      : { action: 'ground', base: movementBase, turn: movementBase, round: null, day: null, run: null };
     
-    // Special handling for Paladin/Avenger spellcasting (RC rules: cast as Cleric of 1/3 level if WIS >= 13) - Gestione speciale per incantesimi Paladino/Vendicatore (regole RC: lancia come Chierico di 1/3 livello se SAG >= 13)
-    const isPaladinOrAvenger = /paladino|paladin|vendicatore|avenger/.test(classNameLower);
-    const wisScore = Number(stats?.wis) || 0;
-    let maxSpellLevel = Number(classSystem?.maxSpellLevel || classSystem?.spells?.maxSpellLevel || 0);
-    
-    // If Paladin/Avenger has WIS >= 13, set maxSpellLevel to 7 (same as Cleric) - Se Paladino/Vendicatore ha SAG >= 13, imposta maxSpellLevel a 7 (come Chierico)
-    if (isPaladinOrAvenger && wisScore >= 13) {
-      maxSpellLevel = 7;
-    }
+    // Spell level from the selected class item
+    const maxSpellLevel = Number(classSystem?.maxSpellLevel || classSystem?.spells?.maxSpellLevel || 0);
     
     // Get class level data
     const levels = classSystem.levels || [];
@@ -564,24 +541,40 @@ export class PGGenerator {
     // Calculate XP values - Calcola valori PX
     const { xpCurrent, xpNext } = this._getLevelXP(levelEntry, level, classSystem);
     
-    // Calculate XP bonus based on prime requisites - Calcola bonus PX basato su prerequisiti primari
+    // XP bonus from FaDe ClassDefinitionItem.getXPBonus
     const xpBonus = this._calculateXPBonus(classItem, stats);
     
     // Get class title - Ottieni titolo classe
     const classTitle = this._getClassTitle(classItem, level);
     
     // Build languages - Costruisci lingue
-    const languages = this._buildLanguages(className, alignment, stats.int);
+    const languages = this._buildLanguages(classKey, species, alignment, stats.int);
     
     // Calculate weapon mastery points and skill slots - Calcola punti padronanza armi e slot abilità
-    const weaponMasteryPoints = this._getWeaponMasteryPoints(className, level);
-    const skillSlots = this._getSkillSlots(className, level, stats.int);
+    const weaponMasteryPoints = this._getWeaponMasteryPoints(classKey, level);
+    const skillSlots = this._getSkillSlots(classKey, species, level, stats.int);
     
     // Build GM notes (without languages and XP bonus) - Costruisci note GM (senza lingue e bonus PX)
     const gmNotes = `=== ${game.i18n.localize('MASTERY.Title')} ===<br>${game.i18n.localize('MASTERY.Points')}: ${weaponMasteryPoints}<br><br>=== ${game.i18n.localize('SKILLS.Title')} ===<br>${game.i18n.localize('SKILLS.Slots')}: ${skillSlots}`;
     
     // Get token image - Ottieni immagine token
-    const tokenImg = this._getTokenImage(className);
+    const tokenImg = this._getTokenImage(classKey);
+    const hasDarkvision = species === 'Elf' || species === 'Dwarf' || isElf(classKey) || isDwarf(classKey);
+    const basicProficiency = !!classSystem.basicProficiency;
+    const classReqs = buildClassRequirements(classItem);
+    const abilityMins = classSystem.abilities || {};
+    const abilityBlock = {};
+    for (const abil of ['str', 'int', 'wis', 'dex', 'con', 'cha']) {
+      const score = Number(stats[abil]) || 0;
+      const minScore = classReqs.min[abil] ?? abilityMins[abil]?.min ?? 1;
+      abilityBlock[abil] = {
+        value: score,
+        total: score,
+        mod: 0,
+        tempMod: 0,
+        min: (minScore !== null && minScore !== undefined) ? Number(minScore) || 1 : 1
+      };
+    }
     
     // Get saves from class - Ottieni tiri salvezza dalla classe
     const saves = classSystem.saves || {};
@@ -604,8 +597,8 @@ export class PGGenerator {
         details: {
           class: className,
           classId: classItem.id,
-          classKey: classSystem.key || '',
-          species: classSystem.species || '',
+          classKey: classKey,
+          species: species,
           alignment,
           level: String(level),
           title: classTitle,
@@ -629,18 +622,14 @@ export class PGGenerator {
           base: 10,
           total: 10
         },
-        abilities: {
-          str: { value: stats.str, total: stats.str, mod: 0, tempMod: 0, min: 1 },
-          int: { value: stats.int, total: stats.int, mod: 0, tempMod: 0, min: 1 },
-          wis: { value: stats.wis, total: stats.wis, mod: 0, tempMod: 0, min: 1 },
-          dex: { value: stats.dex, total: stats.dex, mod: 0, tempMod: 0, min: 1 },
-          con: { value: stats.con, total: stats.con, mod: 0, tempMod: 0, min: 1 },
-          cha: { value: stats.cha, total: stats.cha, mod: 0, tempMod: 0, min: 1 }
-        },
+        abilities: abilityBlock,
         thac0: { value: levelEntry?.thac0 || classSystem.thac0 || 19 },
-        movement: { max: movementMax },
+        movement: {
+          modifiers: { encumbrance: 1 },
+          modes: [movementMode]
+        },
         combat: {
-          basicProficiency: /mistico|mystic/.test(classNameLower)
+          basicProficiency
         },
         saves: {
           breath: levelSaves.breath || 15,
@@ -667,11 +656,11 @@ export class PGGenerator {
         bar1: { attribute: 'hp' },
         sight: { 
           enabled: true,
-          range: /elfo|elf|nano|dwarf/.test(classNameLower) ? 18 : 0,
-          visionMode: /elfo|elf|nano|dwarf/.test(classNameLower) ? 'darkvision' : 'basic',
-          color: /elfo|elf|nano|dwarf/.test(classNameLower) ? '#3232ff' : null
+          range: hasDarkvision ? 18 : 0,
+          visionMode: hasDarkvision ? 'darkvision' : 'basic',
+          color: hasDarkvision ? '#3232ff' : null
         },
-        detectionModes: /elfo|elf|nano|dwarf/.test(classNameLower) ? {
+        detectionModes: hasDarkvision ? {
           basicSight: {
             enabled: false,
             range: 0
@@ -694,38 +683,14 @@ export class PGGenerator {
             range: null
           }
         },
-        removeDetectionMode: /elfo|elf|nano|dwarf/.test(classNameLower) ? ['darkvision'] : ['darkvision']
+        removeDetectionMode: ['darkvision']
       }
     };
   }
 
-  // Get max spell level for class (RC rules) - Ottieni livello massimo incantesimi per classe (regole RC)
-  _getMaxSpellLevel(className, stats) {
-    const normalized = (className || '').toLowerCase();
-    const sagScore = Number(stats?.wis) || 0;
-    
-    // Spellcasting classes with specific max spell levels
-    if (normalized.includes('mago') || normalized.includes('magic-user') || normalized.includes('wizard')) {
-      return 9; // Mage
-    }
-    if (normalized.includes('chierico') || normalized.includes('cleric')) {
-      return 7; // Cleric
-    }
-    if (normalized.includes('elfo') || normalized.includes('elf')) {
-      return 5; // Elf
-    }
-    if (normalized.includes('bardo') || normalized.includes('bard')) {
-      return 4; // Bard
-    }
-    
-    // Paladin and Avenger: only if WIS >= 13
-    if (normalized.includes('paladino') || normalized.includes('paladin') ||
-        normalized.includes('vendicatore') || normalized.includes('avenger')) {
-      return sagScore >= 13 ? 7 : 0;
-    }
-    
-    // All other classes (Fighter, Thief, Dwarf, Halfling, Mystic, Druid)
-    return 0;
+  // Max spell level from class item (system of record)
+  _getMaxSpellLevel(classItem) {
+    return Number(classItem?.system?.maxSpellLevel || classItem?.system?.spells?.maxSpellLevel || 0);
   }
 
   // Get XP values for level - Ottieni valori PX per livello
@@ -772,170 +737,18 @@ export class PGGenerator {
     return Math.max(1, total);
   }
 
-  // Calculate XP bonus based on prime requisites (RC rules) - Calcola bonus PX basato su prerequisiti primari (regole RC)
-  // Returns: +10, +5, 0, -10, or -20 based on prime requisite scores - Restituisce: +10, +5, 0, -10 o -20 basato sui punteggi dei prerequisiti primari
+  // XP bonus via FaDe ClassDefinitionItem.getXPBonus (primeReqs on the class item)
   _calculateXPBonus(classItem, stats) {
-    const primeReqs = classItem?.system?.primeReqs;
-    if (!primeReqs || !Array.isArray(primeReqs) || primeReqs.length === 0) return '0';
-    
-    const className = (classItem?.name || '').toLowerCase();
-    const isElf = /elf/.test(className);
-    const isHalfling = /halfling|mezzelfo/.test(className);
-    const isMystic = /mistico|mystic/.test(className);
-    const isBard = /bard/.test(className);
-    const isPaladin = /paladino|paladin/.test(className);
-    const isAvenger = /vendicatore|avenger/.test(className);
-    
-    // Get ability scores
-    const forVal = Number(stats.str) || 0;
-    const intVal = Number(stats.int) || 0;
-    const desVal = Number(stats.dex) || 0;
-    const sagVal = Number(stats.wis) || 0;
-    const carVal = Number(stats.cha) || 0;
-    
-    // Helper to calculate bonus/penalty for a single ability score (standard classes) - Helper per calcolare bonus/penalità per un singolo punteggio caratteristica (classi standard)
-    // RC Rules: 16-18 = +10%, 13-15 = +5%, 9-12 = 0%, 6-8 = -10%, 3-5 = -20%
-    const getStandardBonus = (score) => {
-      if (score >= 16) return 10;
-      if (score >= 13) return 5;
-      if (score >= 9) return 0;
-      if (score >= 6) return -10;  // 6-8
-      return -20; // 3-5
-    };
-    
-    // Helper for Mystic (reduced penalties) - Helper per Mistico (penalità ridotte)
-    // RC Rules: 16-18 = +10%, 13-15 = +5%, 9-12 = 0%, 6-8 = -5%, 3-5 = -10%
-    const getMysticBonus = (score) => {
-      if (score >= 16) return 10;
-      if (score >= 13) return 5;
-      if (score >= 9) return 0;
-      if (score >= 6) return -5;   // 6-8
-      return -10; // 3-5
-    };
-    
-    // Helper for Elf (dual: FOR≥13 AND INT) - Helper per Elfo (duale: FOR≥13 E INT)
-    // RC Rules: FOR≥13 AND INT 13-15 = +5%, FOR≥13 AND INT 16-18 = +10%, otherwise 0%
-    const getElfBonus = (forScore, intScore) => {
-      if (forScore >= 13 && intScore >= 16) return 10;
-      if (forScore >= 13 && intScore >= 13) return 5;
-      return 0; // No penalties for low scores
-    };
-    
-    // Helper for Halfling (dual: FOR or DES) - Helper per Halfling (duale: FOR o DES)
-    // RC Rules: FOR≥13 OR DES 13-18 = +5%, FOR≥13 AND DES 13-18 = +10%, otherwise 0%
-    const getHalflingBonus = (forScore, desScore) => {
-      const hasFor13 = forScore >= 13;
-      const hasDes13 = desScore >= 13;
-      if (hasFor13 && hasDes13) return 10;
-      if (hasFor13 || hasDes13) return 5;
-      return 0; // No penalties for low scores
-    };
-    
-    // Special class handling per RC rules - Gestione speciale classi secondo regole RC
-    if (isElf) {
-      // Elf: FOR≥13 AND INT prime requisites - Elfo: FOR≥13 E INT prerequisiti primari
-      return String(getElfBonus(forVal, intVal));
+    if (typeof classItem?.getXPBonus === 'function') {
+      const bonus = classItem.getXPBonus(toAbilityValues(stats));
+      return String(bonus ?? 0);
     }
-    
-    if (isHalfling) {
-      // Halfling: FOR OR DES prime requisites - Halfling: FOR O DES prerequisiti primari
-      return String(getHalflingBonus(forVal, desVal));
-    }
-    
-    if (isMystic) {
-      // Mystic: Single FOR prime requisite (reduced penalties) - Mistico: Prerequisito FOR singolo (penalità ridotte)
-      return String(getMysticBonus(forVal));
-    }
-    
-    if (isBard) {
-      // Bard: CHA + DES per RC (use standard combined logic) - Bardo: CAR + DES per RC (usa logica combinata standard)
-      // RC implies both need to be high, so use AND logic
-      if (carVal >= 16 && desVal >= 16) return '10';
-      if (carVal >= 13 && desVal >= 13) return '5';
-      // Penalties only apply to prime requisites (per B/X), so check if either is low - Le penalità si applicano solo ai prerequisiti primari (per B/X), quindi controlla se uno è basso
-      const lowestScore = Math.min(carVal, desVal);
-      if (lowestScore <= 5) return '-20';
-      if (lowestScore <= 8) return '-10';
-      return '0';
-    }
-    
-    if (isPaladin) {
-      // Paladin: FOR and SAG prime requisites (RC: must have both FOR≥13 and SAG≥13 for bonus) - Paladino: FOR e SAG prerequisiti primari (RC: deve avere entrambi FOR≥13 e SAG≥13 per bonus)
-      if (forVal >= 16 && sagVal >= 13) return '10';
-      if (forVal >= 13 && sagVal >= 13) return '5';
-      // Penalties per standard rules - Penalità secondo regole standard
-      const lowestScore = Math.min(forVal, sagVal);
-      if (lowestScore <= 5) return '-20';
-      if (lowestScore <= 8) return '-10';
-      return '0';
-    }
-    
-    if (isAvenger) {
-      // Avenger: Same as Paladin (FOR and SAG) - Vendicatore: Uguale a Paladino (FOR e SAG)
-      if (forVal >= 16 && sagVal >= 13) return '10';
-      if (forVal >= 13 && sagVal >= 13) return '5';
-      const lowestScore = Math.min(forVal, sagVal);
-      if (lowestScore <= 5) return '-20';
-      if (lowestScore <= 8) return '-10';
-      return '0';
-    }
-    
-    // Generic calculation for other classes using primeReqs - Calcolo generico per altre classi usando primeReqs
-    // Handle single or dual prime requisites - Gestisci prerequisiti primari singoli o doppi
-    if (primeReqs.length === 1) {
-      const req = primeReqs[0];
-      const ability = (req.ability || '').toLowerCase();
-      const score = Number(stats[ability]) || 0;
-      return String(getStandardBonus(score));
-    } else {
-      // Multiple prime requisites - use combined logic - Prerequisiti primari multipli - usa logica combinata
-      const scores = primeReqs.map(req => {
-        const ability = (req.ability || '').toLowerCase();
-        return Number(stats[ability]) || 0;
-      });
-      
-      // For dual requisites, apply combined rules - Per prerequisiti doppi, applica regole combinate
-      if (scores.length === 2) {
-        const [score1, score2] = scores;
-        // Bonus requires both to be high - Il bonus richiede che entrambi siano alti
-        if (score1 >= 16 && score2 >= 16) return '10';
-        if (score1 >= 13 && score2 >= 13) return '5';
-        // Penalty uses the lowest score - La penalità usa il punteggio più basso
-        const lowestScore = Math.min(score1, score2);
-        if (lowestScore <= 5) return '-20';
-        if (lowestScore <= 8) return '-10';
-        return '0';
-      }
-      
-      // For 3+ requisites - Per 3+ prerequisiti
-      // RC rules: all must be high for bonus, lowest determines penalty - Regole RC: tutti devono essere alti per bonus, il più basso determina penalità
-      let hasHigh = true;
-      let hasVeryLow = false;
-      let hasLow = false;
-      let lowestScore = 18;
-      
-      for (const score of scores) {
-        if (score < 13) hasHigh = false;
-        if (score <= 5) hasVeryLow = true;
-        if (score <= 8) hasLow = true;
-        if (score < lowestScore) lowestScore = score;
-      }
-      
-      if (hasHigh) {
-        // Check if all are >= 16 for +10 - Controlla se tutti sono >= 16 per +10
-        const allVeryHigh = scores.every(s => s >= 16);
-        return allVeryHigh ? '10' : '5';
-      }
-      if (hasVeryLow) return '-20';
-      if (hasLow) return '-10';
-      return '0';
-    }
+    return '0';
   }
 
   // Get class title for level - Ottieni titolo classe per livello
   _getClassTitle(classItem, levelNum) {
-    const clsName = (classItem?.name || '').toLowerCase();
-    if (/dragon|drago/.test(clsName)) return '';
+    if (isDragon(classItem, getClassSpecies(classItem))) return '';
     
     const levels = classItem?.system?.levels;
     if (!levels || !Array.isArray(levels)) return '';
@@ -973,24 +786,18 @@ export class PGGenerator {
     return `${totalCm} cm`;
   }
 
-  // Build languages string - Costruisci stringa lingue
-  _buildLanguages(className, alignment, intScore) {
-    const cls = (className || '').toLowerCase();
-    const isDragon = /dragon|drago/.test(cls);
-    if (isDragon) return '';
-    
-    const isDwarf = /dwarf|nano/.test(cls);
-    const isElf = /elf|elfo/.test(cls);
-    const isHalfling = /halfling|mezzuomo/.test(cls);
+  // Build languages string — use class key / species, not localized name
+  _buildLanguages(classKey, species, alignment, intScore) {
+    if (isDragon(classKey, species)) return '';
     
     const intEffect = this._getIntLanguageEffect(intScore);
     const commonLang = game.i18n.localize('LANGUAGE.Common');
 
-    if (isDwarf) {
+    if (isDwarf(classKey) || species === 'Dwarf') {
       const langs = [game.i18n.localize('LANGUAGE.Dwarven'), game.i18n.localize('LANGUAGE.Gnomish'), game.i18n.localize('LANGUAGE.Goblin'), game.i18n.localize('LANGUAGE.Kobold'), commonLang, alignment, `(${intEffect})`];
       return langs.join(', ');
     }
-    if (isElf) {
+    if (isElf(classKey) || species === 'Elf') {
       const langs = [game.i18n.localize('LANGUAGE.Elvish'), game.i18n.localize('LANGUAGE.Gnoll'), game.i18n.localize('LANGUAGE.Hobgoblin'), game.i18n.localize('LANGUAGE.Orcish'), commonLang, alignment, `(${intEffect})`];
       return langs.join(', ');
     }
@@ -1009,15 +816,14 @@ export class PGGenerator {
   }
 
   // Calculate weapon mastery points
-  _getWeaponMasteryPoints(className, level) {
-    const cls = (className || '').toLowerCase();
-    const isFighter = /guerrier|fighter/.test(cls);
+  _getWeaponMasteryPoints(classKey, level) {
+    const fighter = isFighter(classKey);
     const lvl = Number(level) || 1;
     
     const thresholds = [1, 3, 6, 9, 11, 15, 19, 23, 27, 30, 33, 36];
     let points = 0;
     
-    if (isFighter) {
+    if (fighter) {
       for (const t of thresholds) {
         if (lvl >= t) points += 2;
       }
@@ -1031,29 +837,28 @@ export class PGGenerator {
   }
 
   // Calculate general skill slots - Calcola slot abilità generali
-  _getSkillSlots(className, level, intScore) {
-    const cls = (className || '').toLowerCase();
+  _getSkillSlots(classKey, species, level, intScore) {
     const lvl = Number(level) || 1;
     const int = Number(intScore) || 0;
     
-    const isDwarf = /dwarf|nano/.test(cls);
-    const isElf = /elf|elfo/.test(cls);
-    const isHalfling = /halfling|mezzuomo/.test(cls);
-    const isDemihuman = isDwarf || isElf || isHalfling;
+    const dwarf = isDwarf(classKey) || species === 'Dwarf';
+    const elf = isElf(classKey) || species === 'Elf';
+    const halfling = isHalfling(classKey) || species === 'Halfling';
+    const demihuman = isDemihuman(classKey, species);
     
     let slots = 0;
     
-    if (isDemihuman) {
+    if (demihuman) {
       if (lvl >= 1) slots = 4;
       if (lvl >= 5) slots += 1;
       if (lvl >= 9) slots += 1;
-      if (isDwarf && lvl >= 12) {
+      if (dwarf && lvl >= 12) {
         const extraLevels = Math.max(0, lvl - 12);
         slots += Math.floor(extraLevels / 4);
-      } else if (isElf && lvl >= 11) {
+      } else if (elf && lvl >= 11) {
         const extraLevels = Math.max(0, lvl - 11);
         slots += Math.floor(extraLevels / 5);
-      } else if (isHalfling && lvl >= 9) {
+      } else if (halfling && lvl >= 9) {
         const extraLevels = Math.max(0, lvl - 9);
         slots += Math.floor(extraLevels / 6);
       }
@@ -1111,9 +916,9 @@ export class PGGenerator {
     ];
     return alignments[Math.floor(Math.random() * alignments.length)];
   }
-  async _generateName(className, sex) {
-    // Use embedded name tables for instant generation (no async, no Foundry dependencies)
-    return generateName(className, sex);
+  async _generateName(speciesOrClass, sex) {
+    // Name tables keyed by species (Human/Elf/Dwarf/Halfling), not localized class name
+    return generateName(speciesOrClass, sex);
   }
 
   _getAbilityBonus(score) {
@@ -1124,9 +929,8 @@ export class PGGenerator {
     return 0;
   }
   
-  _getTokenImage(className) {
-    const normalized = (className || '').toLowerCase().trim();
-    return this.classTokenImages[normalized] || this.defaultImg;
+  _getTokenImage(classKey) {
+    return getClassTokenImage(classKey, this.defaultImg);
   }
   
   async _getOrCreateFolder(name) {
@@ -1268,57 +1072,27 @@ export class PGGenerator {
     }
   }
   
-  async _addStartingEquipment(actor, className) {
+  async _addStartingEquipment(actor, classItemOrKey) {
     // Add fixed base items to all characters - Aggiunge oggetti base fissi a tutti i personaggi
     await this._addFixedItems(actor);
     
     // Add class-specific equipment from kit - Aggiunge equipaggiamento specifico per classe dal kit
-    await this._addClassEquipmentFromKit(actor, className);
+    await this._addClassEquipmentFromKit(actor, classItemOrKey);
   }
   
   /**
-   * Add class equipment from CLASS_EQUIPMENT_KITS - Aggiunge equipaggiamento classe da CLASS_EQUIPMENT_KITS
+   * Optional kit overlay — only runs when CLASS_EQUIPMENT_KITS has an entry for the class key.
    */
-  async _addClassEquipmentFromKit(actor, className) {
-    // Map English class names to Italian - Mappa nomi classi inglesi a italiani
-    const classNameMap = {
-      'paladin': 'Paladino',
-      'paladino': 'Paladino',
-      'paladino (c)': 'Paladino',
-      'paladin (c)': 'Paladino',
-      'cleric': 'Chierico',
-      'chierico': 'Chierico',
-      'fighter': 'Guerriero',
-      'guerriero': 'Guerriero',
-      'mage': 'Mago',
-      'mago': 'Mago',
-      'magic-user': 'Mago',
-      'thief': 'Ladro',
-      'ladro': 'Ladro',
-      'dwarf': 'Nano',
-      'nano': 'Nano',
-      'elf': 'Elfo',
-      'elfo': 'Elfo',
-      'halfling': 'Halfling',
-      'druid': 'Druido',
-      'druido': 'Druido',
-      'avenger': 'Vendicatore',
-      'vendicatore': 'Vendicatore',
-      'avenger (c)': 'Vendicatore',
-      'vendicatore (c)': 'Vendicatore',
-      'mystic': 'Mistico',
-      'mistico': 'Mistico',
-      'bard': 'Bardo',
-      'bardo': 'Bardo'
-    };
-    
-    const mappedName = classNameMap[className?.toLowerCase()] || className;
-    const kit = CLASS_EQUIPMENT_KITS[mappedName] || CLASS_EQUIPMENT_KITS[className];
+  async _addClassEquipmentFromKit(actor, classItemOrKey) {
+    const classKey = getClassKey(classItemOrKey);
+    const kit = getEquipmentKit(CLASS_EQUIPMENT_KITS, classItemOrKey);
     
     if (!kit) {
-      console.warn(`${MODULE_ID} | ❌ No equipment kit found for class: ${className} (mapped: ${mappedName})`);
+      // Unknown / unsupported kit key is fine — character still created without a kit
+      console.debug(`${MODULE_ID} | No optional equipment kit for class key: ${classKey}`);
       return;
     }
+    const mappedName = classKey;
     
     let addedCount = 0;
     let failedCount = 0;
@@ -1417,11 +1191,10 @@ export class PGGenerator {
         }
       }
       
-      // Check if only Pugnale was assigned as weapon and class is not Mage - Controlla se è stato assegnato solo Pugnale come arma e la classe non è Mago
-      const isMage = /mago|magic-user|wizard/.test(className?.toLowerCase() || '');
+      // Check if only Pugnale was assigned as weapon and class is not Mage
       const onlyDagger = assignedWeapons.length === 1 && assignedWeapons[0]?.toLowerCase() === 'pugnale';
       
-      if (onlyDagger && !isMage && weaponTableIds.length > 0) {
+      if (onlyDagger && !isMagicUser(classKey) && weaponTableIds.length > 0) {
         ui.notifications?.info(game.i18n.format('NOTIFY.WeaponAdded', { weapon: assignedWeapons[0] }));
         
         // Try to add another weapon from the first available weapon table - Prova ad aggiungere un'altra arma dalla prima tabella armi disponibile
@@ -1518,8 +1291,7 @@ export class PGGenerator {
     const items = [];
     const addedAbilityNames = new Set(); // Track already added abilities to prevent duplicates - Traccia abilità già aggiunte per prevenire duplicati
     const classSystem = classItem?.system || {};
-    const className = (classItem?.name || '').toLowerCase();
-    const classKey = classSystem?.key || '';
+    const classKey = getClassKey(classItem);
     const levels = classSystem?.levels || [];
     
     // Helper to find ability item in compendiums ONLY - Helper per trovare oggetto abilità SOLO nei compendium
@@ -1616,43 +1388,47 @@ export class PGGenerator {
       }
     };
     
-    // Helper to find class item in compendiums ONLY - Helper per trovare oggetto classe SOLO nei compendium
-    const findClassItem = async (namePattern) => {
-      // Search in compendiums ONLY (never use world items) - Cerca SOLO nei compendium (non usare mai oggetti del mondo)
+    // Find class item by non-localized system.key (prefer FaDe fadeFinder)
+    const findClassItemByKey = async (targetKey) => {
+      const want = getClassKey(targetKey);
+      if (game.fade?.fadeFinder?.getClass) {
+        try {
+          const found = await game.fade.fadeFinder.getClass(null, want);
+          if (found) return found;
+        } catch (e) {}
+      }
       const packs = game.packs?.filter(p => p.metadata.type === 'Item') || [];
       for (const pack of packs) {
-        const compendiumItem = pack.index?.find(i => 
-          namePattern.test(i.name?.toLowerCase()) && i.type === 'class'
-        );
-        if (compendiumItem) {
+        const classEntries = pack.index?.filter(i => i.type === 'class') || [];
+        for (const entry of classEntries) {
           try {
-            const fullItem = await pack.getDocument(compendiumItem._id);
-            if (fullItem) return fullItem;
+            const fullItem = await pack.getDocument(entry._id);
+            if (fullItem && getClassKey(fullItem) === want) return fullItem;
           } catch (e) {}
         }
       }
       return null;
     };
     
-    // Handle special class combinations (Paladin/Vendicatore, Druido) - Gestisci combinazioni classi speciali (Paladino/Vendicatore, Druido)
+    // Handle special class combinations (Paladin/Avenger, Druid) by class key
     try {
-      if (/paladin|paladino|avenger|vendicatore/.test(className)) {
-        const fighterClass = await findClassItem(/guerrier|fighter/);
-        // Paladins and Avengers are level 9 warriors who change career - import all warrior abilities up to level 9 - Paladini e Vendicatori sono guerrieri di livello 9 che cambiano carriera - importa tutte le abilità guerriero fino al livello 9
+      if (PALADIN_AVENGER_KEYS.has(classKey)) {
+        const fighterClass = await findClassItemByKey('F');
+        // Level-9 warrior career changes — import Fighter abilities to 9
         if (fighterClass) {
           await importAbilitiesFromClass(fighterClass, 9, `[${fighterClass.name}] `);
         } else {
-          console.warn(`${MODULE_ID} | ⚠️ Could not find Guerriero class for Paladin/Vendicatore abilities`);
+          console.warn(`${MODULE_ID} | ⚠️ Could not find Fighter (F) class for ${classKey} abilities`);
         }
       }
       
-      if (/druid|druido/.test(className)) {
-        const clericClass = await findClassItem(/chierico|cleric/);
-        // Druids are level 9 clerics who change career - import all cleric abilities up to level 9 - Druidi sono chierici di livello 9 che cambiano carriera - importa tutte le abilità chierico fino al livello 9
+      if (isDruid(classKey)) {
+        const clericClass = await findClassItemByKey('C');
+        // Druids are level 9 clerics who change career
         if (clericClass) {
           await importAbilitiesFromClass(clericClass, 9, `[${clericClass.name}] `);
         } else {
-          console.warn(`${MODULE_ID} | ⚠️ Could not find Chierico class for Druid abilities`);
+          console.warn(`${MODULE_ID} | ⚠️ Could not find Cleric (C) class for Druid abilities`);
         }
       }
       
@@ -1737,15 +1513,14 @@ export class PGGenerator {
   // Class Requirements Validation - Validazione Requisiti Classe
   // ==========================================
   
-  validateClassRequirements(className, stats) {
-    const requirements = this._getClassRequirements(className);
+  validateClassRequirements(classItem, stats) {
+    const requirements = buildClassRequirements(classItem);
     
     const results = {
       valid: true,
       issues: []
     };
     
-    // Map abbreviazioni inglesi a italiano - Mappa abbreviazioni inglesi a italiano
     const statNames = {
       str: 'FOR',
       dex: 'DES',
@@ -1755,7 +1530,6 @@ export class PGGenerator {
       cha: 'CAR'
     };
     
-    // Check minimum stats - Controlla statistiche minime
     for (const [stat, minValue] of Object.entries(requirements.min || {})) {
       if (stats[stat] < minValue) {
         results.valid = false;
@@ -1767,32 +1541,8 @@ export class PGGenerator {
     return results;
   }
   
-  _getClassRequirements(className) {
-    const normalized = (className || '').toLowerCase();
-    
-    const requirements = {
-      'bardo': { primeReq: ['int', 'dex'], min: { dex: 12 } },
-      'chierico': { primeReq: ['wis'], min: { wis: 9 } },
-      'cleric': { primeReq: ['wis'], min: { wis: 9 } },
-      'druido': { primeReq: ['wis'], min: { wis: 12 } },
-      'elfo': { primeReq: ['str', 'int'], min: { str: 9, int: 9 } },
-      'elf': { primeReq: ['str', 'int'], min: { str: 9, int: 9 } },
-      'guerriero': { primeReq: ['str'], min: { str: 9 } },
-      'fighter': { primeReq: ['str'], min: { str: 9 } },
-      'halfling': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 } },
-      'ladro': { primeReq: ['dex'], min: { dex: 9 } },
-      'thief': { primeReq: ['dex'], min: { dex: 9 } },
-      'mago': { primeReq: ['int'], min: { int: 9 } },
-      'magic-user': { primeReq: ['int'], min: { int: 9 } },
-      'mistico': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 } },
-      'mystic': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 } },
-      'nano': { primeReq: ['str'], min: { str: 9 } },
-      'dwarf': { primeReq: ['str'], min: { str: 9 } },
-      'paladino': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 } },
-      'vendicatore': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 } }
-    };
-    
-    return requirements[normalized] || { primeReq: [], min: {} };
+  _getClassRequirements(classItem) {
+    return buildClassRequirements(classItem);
   }
   
   // Get all classes from world and compendiums - Ottieni tutte le classi dal mondo e compendium
@@ -1830,10 +1580,9 @@ export class PGGenerator {
   // Equipment Type Methods - Metodi Tipo Equipaggiamento
   // ==========================================
   
-  async _addClassKitEquipment(actor, className, level) {
-    // Add equipment from class kit using CLASS_EQUIPMENT_KITS constants - Aggiungi equipaggiamento dal kit classe usando costanti CLASS_EQUIPMENT_KITS
-    // This uses real items from compendium via UUIDs and rolls on tables - Questo usa oggetti reali da compendium via UUID e tira su tabelle
-    await this._addStartingEquipment(actor, className);
+  async _addClassKitEquipment(actor, classItemOrKey, level) {
+    // Add equipment from class kit using CLASS_EQUIPMENT_KITS (keyed via class key)
+    await this._addStartingEquipment(actor, classItemOrKey);
   }
   
   async _addRandomEquipment(actor) {

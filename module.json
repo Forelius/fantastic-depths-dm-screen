@@ -1,7 +1,7 @@
 {
   "id": "fantastic-depths-dm-screen",
   "title": "Fantastic Depths DM Screen",
-  "description": "Gestione Party, distribuzione XP e generazione personaggi per Fantastic Depths. Compatibile con Foundry VTT v13 e v14.",
+  "description": "Gestione Party, distribuzione XP e generazione personaggi per Fantastic Depths. Compatibile con Foundry VTT v14.",
   "authors": [
     {
       "name": "FR4NC35C0",
@@ -9,31 +9,23 @@
     }
   ],
   "version": "1.2.8",
-  "minimumCoreVersion": "13",
+  "minimumCoreVersion": "14",
   "compatibleCoreVersion": "14",
   "compatibility": {
-    "minimum": "13",
-    "verified": "14.368"
+    "minimum": "14",
+    "verified": "14"
   },
   "relationships": {
     "systems": [
       {
         "id": "fantastic-depths",
-        "type": "system",
-        "compatibility": {
-          "minimum": "1.2.8",
-          "verified": "1.2.8"
-        }
+        "type": "system"
       }
     ],
     "requires": [
       {
         "id": "fade-compendiums",
-        "type": "module",
-        "compatibility": {
-          "minimum": "1.0.10",
-          "verified": "1.0.10"
-        }
+        "type": "module"
       }
     ]
   },

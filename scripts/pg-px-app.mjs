@@ -4,6 +4,18 @@
 // ==========================================
 
 import { executeAcrobaticsCheck } from './acrobatics-check.mjs';
+import { CLASS_EQUIPMENT_KITS } from './pg-generator.mjs';
+import {
+  getClassKey,
+  getClassSpecies,
+  getRaceGroup,
+  getClassIcon,
+  buildClassRequirements,
+  canRaiseDex,
+  hasEquipmentKit,
+  isMystic,
+  isDragon
+} from './class-keys.mjs';
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const MODULE_ID = 'fantastic-depths-dm-screen';
@@ -84,6 +96,10 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.genStats = { str: 0, int: 0, wis: 0, dex: 0, con: 0, cha: 0 };
     this.genRiserva = 0;
     this.genCurrentClass = null;
+    this.genCurrentClassKey = null;
+    this.genCurrentSpecies = null;
+    this.genCurrentClassItem = null;
+    this.genCurrentClassReqs = null;
     
     // Load saved window position
     const savedPosition = localStorage.getItem('fd-ds-position');
@@ -300,37 +316,14 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
   
   _getNonDragonClasses() {
-    const classes = this._getAllClasses().filter(c => !/dragon|drago/i.test(c.name));
+    // Dropdown uses localized names for display; exclude dragons by name heuristic on index
+    // (full key/species check happens when the class document is loaded on change/create)
+    const classes = this._getAllClasses().filter(c => !isDragon(c.system?.key, c.system?.species) && !/dragon|drago/i.test(c.name || ''));
     return classes.map(c => ({ id: c.id, name: c.name }));
   }
   
   _getClassRequirements() {
-    return {
-      'bardo': { primeReq: ['int', 'dex'], min: { dex: 12 }, lowerable: ['str', 'int', 'wis'] },
-      'chierico': { primeReq: ['wis'], min: { wis: 9 }, lowerable: ['str', 'int'] },
-      'cleric': { primeReq: ['wis'], min: { wis: 9 }, lowerable: ['str', 'int'] },
-      'druido': { primeReq: ['wis'], min: { wis: 12 }, lowerable: ['str', 'int'] },
-      'elfo': { primeReq: ['str', 'int'], min: { str: 9, int: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'elf': { primeReq: ['str', 'int'], min: { str: 9, int: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'guerriero': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'fighter': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'halfling': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'ladro': { primeReq: ['dex'], min: { dex: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'thief': { primeReq: ['dex'], min: { dex: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'mago': { primeReq: ['int'], min: { int: 9 }, lowerable: ['str', 'wis'] },
-      'mystic': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 }, lowerable: ['str', 'dex', 'int', 'wis'] },
-      'mistico': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 }, lowerable: ['str', 'dex', 'int', 'wis'] },
-      'nano': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'dwarf': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'paladino': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'paladino (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'paladin': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'paladin (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'vendicatore': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'vendicatore (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'avenger': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'avenger (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] }
-    };
+    return this.genCurrentClassReqs || buildClassRequirements(this.genCurrentClassItem);
   }
 
   // ==========================================
@@ -408,8 +401,11 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   _formatMovement(movement) {
     if (!movement) return '-';
     if (typeof movement === 'object') {
-      const turn = movement.turn || 0;
-      const round = movement.round || 0;
+      // Current schema: rates live on movement.modes[n]; legacy flat turn/round still supported
+      const mode = Array.isArray(movement.modes) ? movement.modes[0] : null;
+      const rates = mode || movement;
+      const turn = rates.turn || 0;
+      const round = rates.round || 0;
       if (turn && round) return `${turn}/${round}`;
       return turn || round || '-';
     }
@@ -2235,10 +2231,15 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   
   // Send character summary to chat (visible only to GM)
   static async _sendCharacterSummaryToChat(actor) {
-    const useMetric = game.i18n.lang === 'it';
+    const useMetric = game.settings.get(MODULE_ID, 'useMetric');
 
     // Get character data
-    const className = actor.system?.details?.class?.name || actor.items.find(i => i.type === 'class')?.name || 'Sconosciuta';
+    const classItem = actor.items.find(i => i.type === 'class');
+    const className = (typeof actor.system?.details?.class === 'string'
+      ? actor.system.details.class
+      : actor.system?.details?.class?.name)
+      || classItem?.name
+      || 'Sconosciuta';
     const level = actor.system?.details?.level || 1;
     // Get alignment (stored as full string in FaDe system) and translate
     const alignmentRaw = actor.system?.details?.alignment || actor.system?.alignment || '-';
@@ -2260,27 +2261,13 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const sexFull = actor.system?.details?.sex || '-';
     const sex = sexMap[sexFull] || sexFull;
     
-    // Get class icon based on class name
-    const classIcons = {
-      'guerriero': '⚔️', 'fighter': '⚔️',
-      'mago': '🧙‍♂️', 'magic-user': '🧙‍♂️', 'wizard': '🧙‍♂️',
-      'chierico': '⛪', 'cleric': '⛪',
-      'ladro': '🗡️', 'thief': '🗡️', 'rogue': '🗡️',
-      'paladino': '🛡️', 'paladin': '🛡️',
-      'vendicatore': '⚡', 'avenger': '⚡',
-      'druido': '🌿', 'druid': '🌿',
-      'bardo': '🎵', 'bard': '🎵',
-      'mistico': '👁️', 'mystic': '👁️', 'monk': '👁️',
-      'elfo': '🏹', 'elf': '🏹',
-      'nano': '⛏️', 'dwarf': '⛏️',
-      'halfling': '🍃',
-      'drago': '🐉', 'dragon': '🐉'
-    };
-    const classKey = className.toLowerCase();
-    const classIcon = classIcons[classKey] || '👤';
+    // Class icon from non-localized class key
+    const classKey = getClassKey(actor.system?.details?.classKey || classItem);
+    const classIcon = getClassIcon(classKey);
     const height = actor.system?.details?.height || '-';
     const weight = actor.system?.details?.weight || '-';
-    const movement = actor.system?.movement?.max || (useMetric ? 36 : 120);
+    const mode0 = actor.system?.movement?.modes?.[0];
+    const movement = mode0?.turn || mode0?.base || actor.system?.movement?.max || (useMetric ? 36 : 120);
     const hp = actor.system?.hp?.max || 0;
     const ac = actor.system?.ac?.value || 0;
     const thac0 = actor.system?.thac0?.value || 0;
@@ -2510,40 +2497,41 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     
     const classId = selectedOption.value;
     
-    // Get class name from selected option text
-    let className = null;
-    if (classId && classId !== '__RANDOM__') {
-      className = selectedOption.text?.toLowerCase()?.trim();
-    }
-    this.genCurrentClass = className;
+    this.genCurrentClass = null;
+    this.genCurrentClassKey = null;
+    this.genCurrentSpecies = null;
+    this.genCurrentClassItem = null;
+    this.genCurrentClassReqs = null;
     
     if (!classId || classId === '__RANDOM__') {
       PGPXManagerApp._updateStatStyles.call(this);
       return;
     }
     
-    // Get class item from compendium to retrieve maxLevel
-    let maxLevel = 36; // default
-    let startLevel = 1; // default
+    // Load class document — requirements/bounds from FaDe class item
+    let maxLevel = 36;
+    let startLevel = 1;
+    let classAlignment = 'Any';
     
     try {
-      // Search for the class in compendiums
       for (const pack of game.packs) {
         if (pack.metadata?.type === 'Item' || pack.documentName === 'Item') {
           const classItem = await pack.getDocument(classId);
           if (classItem && classItem.type === 'class') {
             const classSystem = classItem.system || {};
-            // Get maxLevel from class system data
+            this.genCurrentClassItem = classItem;
+            this.genCurrentClassKey = getClassKey(classItem);
+            this.genCurrentSpecies = getClassSpecies(classItem);
+            this.genCurrentClass = this.genCurrentClassKey;
+            this.genCurrentClassReqs = buildClassRequirements(classItem);
+            classAlignment = classSystem.alignment || 'Any';
+            
             if (classSystem.maxLevel) {
               maxLevel = parseInt(classSystem.maxLevel) || 36;
             } else if (classSystem.levels && Array.isArray(classSystem.levels)) {
               maxLevel = classSystem.levels.length;
             }
-            // Check for special classes that start at level 9
-            const classNameLower = classItem.name?.toLowerCase() || '';
-            if (/paladino|paladin|vendicatore|avenger|druido|druid/.test(classNameLower)) {
-              startLevel = 9;
-            }
+            startLevel = Math.max(1, parseInt(classSystem.firstLevel) || 1);
             break;
           }
         }
@@ -2566,21 +2554,12 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       levelSelect.innerHTML = html;
     }
     
-    // Update height dropdown based on class race
+    // Update height dropdown based on class species
     const heightSelect = form?.querySelector('#char-height');
-    if (heightSelect && this.genCurrentClass) {
-      const normalizedClass = this.genCurrentClass.toLowerCase();
-      let raceGroup = 'height-human'; // default
+    if (heightSelect && this.genCurrentClassKey) {
+      const race = getRaceGroup(this.genCurrentClassKey, this.genCurrentSpecies);
+      const raceGroup = `height-${race}`;
       
-      if (/nano|dwarf/.test(normalizedClass)) {
-        raceGroup = 'height-dwarf';
-      } else if (/elfo|elf/.test(normalizedClass)) {
-        raceGroup = 'height-elf';
-      } else if (/halfling/.test(normalizedClass)) {
-        raceGroup = 'height-halfling';
-      }
-      
-      // Show only options for the selected race, hide others
       const allOptions = heightSelect.querySelectorAll('option');
       const allOptgroups = heightSelect.querySelectorAll('optgroup');
       
@@ -2605,7 +2584,6 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
         }
       });
       
-      // Reset to random if current selection is not valid for new race
       const currentHeight = heightSelect.value;
       if (currentHeight !== '__RANDOM__') {
         const selectedOpt = heightSelect.querySelector(`option[value="${currentHeight}"]`);
@@ -2614,56 +2592,55 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
         }
       }
       
-      // Update display text for metric system
       this._updateHeightDropdownForMetric();
     }
     
-    // Update styles only - riserva should only change when user manually lowers stats
     PGPXManagerApp._updateStatStyles.call(this);
     
-    // Auto-set alignment based on class restrictions
+    // Auto-set alignment from class.system.alignment / mystic special case
     const alignmentSelect = form?.querySelector('#char-alignment');
-    if (alignmentSelect && className) {
-      const normalizedClass = className.toLowerCase();
-      
-      // Remove any special options that might have been added previously (e.g., Mystic's 75% option)
+    if (alignmentSelect && this.genCurrentClassKey) {
       const specialOption = alignmentSelect.querySelector('option[value="__RANDOM_MISTIC__"]');
       if (specialOption) {
         specialOption.remove();
       }
       
-      // Paladino and Chierico are always Lawful
-      if (normalizedClass.includes('paladino') || normalizedClass.includes('paladin') ||
-          normalizedClass.includes('chierico') || normalizedClass.includes('cleric')) {
-        alignmentSelect.value = 'Lawful';
-      }
-      // Vendicatore is always Chaotic
-      else if (normalizedClass.includes('vendicatore') || normalizedClass.includes('avenger')) {
-        alignmentSelect.value = 'Chaotic';
-      }
-      // Mistico/Monk is 75% Lawful (random) - add special option
-      else if (normalizedClass.includes('mistico') || normalizedClass.includes('mystic')) {
+      // Alignment from class.system.alignment; mystic keeps special 75% Lawful UI option
+      if (isMystic(this.genCurrentClassKey)) {
         const option = document.createElement('option');
         option.value = '__RANDOM_MISTIC__';
         option.text = `🎲 75% ${game.i18n.localize('ALIGNMENT.Lawful')}`;
         option.selected = true;
         alignmentSelect.appendChild(option);
         alignmentSelect.value = '__RANDOM_MISTIC__';
-      }
-      // No alignment restrictions - reset to random if it was a restricted value
-      else {
+      } else if (classAlignment === 'Lawful') {
+        alignmentSelect.value = 'Lawful';
+      } else if (classAlignment === 'Chaotic') {
+        alignmentSelect.value = 'Chaotic';
+      } else if (classAlignment === 'Neutral') {
+        alignmentSelect.value = 'Neutral';
+      } else {
         const currentAlignment = alignmentSelect.value;
-        // If current alignment is a fixed value (Lawful/Chaotic) or the Mystic special option, reset to random
-        if (currentAlignment === 'Lawful' || currentAlignment === 'Chaotic' || currentAlignment === '__RANDOM_MISTIC__') {
+        if (currentAlignment === 'Lawful' || currentAlignment === 'Chaotic' || currentAlignment === 'Neutral' || currentAlignment === '__RANDOM_MISTIC__') {
           alignmentSelect.value = '__RANDOM__';
         }
       }
     }
     
-    // Auto-select "Kit Classe" equipment option when class is selected
+    // Class kit is optional: only offer/select it when a kit exists for this class key
     const equipmentSelect = form?.querySelector('#char-equipment');
+    const kitOption = form?.querySelector('#class-kit-option');
     if (equipmentSelect && classId && classId !== '__RANDOM__') {
-      equipmentSelect.value = '__CLASS_KIT__';
+      const hasKit = hasEquipmentKit(CLASS_EQUIPMENT_KITS, this.genCurrentClassKey);
+      if (kitOption) {
+        kitOption.hidden = !hasKit;
+        kitOption.disabled = !hasKit;
+      }
+      if (hasKit) {
+        equipmentSelect.value = '__CLASS_KIT__';
+      } else if (equipmentSelect.value === '__CLASS_KIT__') {
+        equipmentSelect.value = '__NONE__';
+      }
     }
   }
   
@@ -2696,7 +2673,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const heightSelect = this.element.querySelector('#char-height');
     if (!heightSelect) return;
 
-    const useMetric = game.i18n.lang === 'it';
+    const useMetric = game.settings.get(MODULE_ID, 'useMetric');
     const allOptions = heightSelect.querySelectorAll('option');
     
     allOptions.forEach((opt) => {
@@ -2742,29 +2719,10 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
     
-    // Get class name from stored value (set in _onClassChange)
-    let className = this.genCurrentClass;
-    
-    // If not stored, try to get it from the selected option text
-    if (!className && classSelect) {
-      const selectedOption = classSelect.options[classSelect.selectedIndex];
-      if (selectedOption) {
-        className = selectedOption.text?.toLowerCase();
-      }
-    }
-    
-    // If still not found, try game.items (for world classes)
-    if (!className) {
-      const classItem = game.items.get(classId);
-      className = classItem?.name?.toLowerCase();
-    }
-    
-    // If still not found, use empty requirements (basic functionality)
-    let req = null;
-    if (className) {
-      const requirements = PGPXManagerApp._getClassRequirementsData();
-      req = requirements[className];
-    }
+    // Requirements from loaded FaDe class item
+    const req = this.genCurrentClassReqs
+      || buildClassRequirements(this.genCurrentClassItem)
+      || null;
     
     let riserva = 0;
     
@@ -2794,9 +2752,6 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const stats = ['str', 'int', 'wis', 'dex', 'con', 'cha'];
     // CON and CHA can NEVER be lowered or raised via exchange (official rules)
     const unlowerableStats = ['con', 'cha'];
-    // Classes that can raise DEX (must have DEX as prime requisite)
-    // Bardo, Ladro, Halfling, Mistico have DEX as prime requisite
-    const dexRaisingClasses = ['bardo', 'ladro', 'thief', 'halfling', 'mistico', 'mystic'];
     
     stats.forEach(stat => {
       const plusBtn = form.querySelector(`.gen-stat-plus[data-stat="${stat}"]`);
@@ -2813,13 +2768,11 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
         return;
       }
       
-      // DEX special rule: cannot be lowered, can only be raised for specific classes
+      // DEX special rule: cannot be lowered, can only be raised for specific class keys
       if (stat === 'dex') {
         minusBtn.disabled = true; // DEX can never be lowered
-        // DEX can only be raised for Bardo, Ladro, Halfling, Mistico
-        const canRaiseDex = req?.primeReq?.includes('dex') && 
-                            dexRaisingClasses.some(c => this.genCurrentClass?.includes(c));
-        if (canRaiseDex) {
+        const allowDexRaise = canRaiseDex(req);
+        if (allowDexRaise) {
           plusBtn.disabled = val >= 18 || riserva < 1; // Cost 1 reserve point per 1 DEX increase
         } else {
           plusBtn.disabled = true; // Cannot raise DEX for other classes
@@ -2861,36 +2814,8 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
     
-    // Get class name directly from selected option by value - most reliable method
-    let className = null;
-    if (classSelect && classId) {
-      const selectedOption = Array.from(classSelect.options).find(opt => opt.value === classId);
-      if (selectedOption) {
-        className = selectedOption.text?.toLowerCase()?.trim();
-      }
-    }
-    
-    // Fallback to stored value if available
-    if (!className && this.genCurrentClass) {
-      className = this.genCurrentClass;
-    }
-    
-    // Last resort: try game.items (for world classes)
-    if (!className) {
-      const classItem = game.items.get(classId);
-      className = classItem?.name?.toLowerCase()?.trim();
-    }
-    
-    if (!className) return;
-    
-    const requirements = PGPXManagerApp._getClassRequirementsData();
-    // Try exact match first, then partial match
-    let req = requirements[className];
-    if (!req) {
-      // Try matching by partial name (e.g., "guerriero" matches "guerriero (variant)")
-      const matchingKey = Object.keys(requirements).find(k => className.includes(k) || k.includes(className));
-      if (matchingKey) req = requirements[matchingKey];
-    }
+    const req = this.genCurrentClassReqs || buildClassRequirements(this.genCurrentClassItem);
+    if (!req || (!this.genCurrentClassKey && !this.genCurrentClassItem)) return;
     
     const stats = ['str', 'int', 'wis', 'dex', 'con', 'cha'];
     const riservaInput = form.querySelector('#riserva-points');
@@ -2927,15 +2852,12 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
         return;
       }
       
-      // DEX special rule: cannot be lowered, can only be raised for specific classes
+      // DEX special rule: cannot be lowered, can only be raised for specific class keys
       if (stat === 'dex') {
         if (plusBtn && minusBtn) {
           minusBtn.disabled = true; // DEX can never be lowered
-          // DEX can only be raised for Bardo, Ladro, Halfling, Mistico
-          const dexRaisingClasses = ['bardo', 'ladro', 'thief', 'halfling', 'mistico', 'mystic'];
-          const canRaiseDex = req?.primeReq?.includes('dex') && 
-                              dexRaisingClasses.some(c => this.genCurrentClass?.includes(c));
-          if (canRaiseDex) {
+          const allowDexRaise = canRaiseDex(req);
+          if (allowDexRaise) {
             plusBtn.disabled = val >= 18 || riserva < 1; // Cost 1 reserve point per 1 DEX increase
           } else {
             plusBtn.disabled = true;
@@ -2993,32 +2915,7 @@ export class PGPXManagerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
   
   static _getClassRequirementsData() {
-    return {
-      'bardo': { primeReq: ['int', 'dex'], min: { dex: 12 }, lowerable: ['str', 'int', 'wis'] },
-      'chierico': { primeReq: ['wis'], min: { wis: 9 }, lowerable: ['str', 'int'] },
-      'cleric': { primeReq: ['wis'], min: { wis: 9 }, lowerable: ['str', 'int'] },
-      'druido': { primeReq: ['wis'], min: { wis: 12 }, lowerable: ['str', 'int'] },
-      'elfo': { primeReq: ['str', 'int'], min: { str: 9, int: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'elf': { primeReq: ['str', 'int'], min: { str: 9, int: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'guerriero': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'fighter': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'halfling': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'ladro': { primeReq: ['dex'], min: { dex: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'thief': { primeReq: ['dex'], min: { dex: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'mago': { primeReq: ['int'], min: { int: 9 }, lowerable: ['str', 'wis'] },
-      'mystic': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 }, lowerable: ['str', 'dex', 'int', 'wis'] },
-      'mistico': { primeReq: ['str', 'dex'], min: { str: 9, dex: 9 }, lowerable: ['str', 'dex', 'int', 'wis'] },
-      'nano': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'dwarf': { primeReq: ['str'], min: { str: 9 }, lowerable: ['str', 'int', 'wis'] },
-      'paladino': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'paladino (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'paladin': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'paladin (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'vendicatore': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'vendicatore (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'avenger': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] },
-      'avenger (c)': { primeReq: ['str', 'wis'], min: { str: 9, wis: 13 }, lowerable: ['str', 'int'] }
-    };
+    return this.genCurrentClassReqs || buildClassRequirements(this.genCurrentClassItem);
   }
   
   // Calculate ability modifier based on score
