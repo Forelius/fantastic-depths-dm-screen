@@ -3,7 +3,7 @@
 // Delegates to game.fade.registry / SpecialAbilityItem.roll
 // ==========================================
 
-/** Request UI save keys → FaDe customSaveCode */
+/** Request UI save keys → FaDe customCode (save specialAbility) */
 const SAVE_CODE_MAP = {
   wand: 'wand',
   spell: 'spell',
@@ -15,14 +15,30 @@ const SAVE_CODE_MAP = {
 };
 
 /**
- * Stable pack document ids for the four base exploration abilities.
- * Used only to match embedded items via sourceId (not Compendium UUID paths).
+ * Base exploration abilities (pack docs under Special Abilities → Exploration).
+ * `names` = bilingual substrings for actor item matching (temporary until durable id).
  */
-const EXPLORE_SOURCE_IDS = {
-  findSecretDoors: 'akgcSVIh27fXqbVW',
-  forceOpenDoors: 'nPZLQJzGQ7b0g665',
-  listenAtDoors: 'qTQsTNYfcHpEki7V',
-  findTraps: 'BDFBtg7fOKRvlzbd'
+export const EXPLORATION_ABILITIES = {
+  findSecretDoors: {
+    id: 'akgcSVIh27fXqbVW',
+    uuid: 'Compendium.fade-compendiums.item-compendium.Item.akgcSVIh27fXqbVW',
+    names: ['Porte Segrete', 'Detect Secret Door', 'Find Secret Doors']
+  },
+  forceOpenDoors: {
+    id: 'nPZLQJzGQ7b0g665',
+    uuid: 'Compendium.fade-compendiums.item-compendium.Item.nPZLQJzGQ7b0g665',
+    names: ['Forzare Porte', 'Open Door', 'Force Open Doors']
+  },
+  listenAtDoors: {
+    id: 'qTQsTNYfcHpEki7V',
+    uuid: 'Compendium.fade-compendiums.item-compendium.Item.qTQsTNYfcHpEki7V',
+    names: ['Origliare Porte', 'Listen Door', 'Listen at Doors']
+  },
+  findTraps: {
+    id: 'BDFBtg7fOKRvlzbd',
+    uuid: 'Compendium.fade-compendiums.item-compendium.Item.BDFBtg7fOKRvlzbd',
+    names: ['Scoprire Trappole', 'Find Trap', 'Find Traps']
+  }
 };
 
 /**
@@ -69,24 +85,19 @@ export function mapSaveCode(saveKey) {
 }
 
 /**
- * Find an explore specialAbility already on the actor by pack source id.
+ * Find an explore specialAbility on the actor by bilingual name match.
  * @param {Actor} actor
  * @param {string} skillKey request data-skill key
  * @returns {Item|null}
  */
 export function findExploreItem(actor, skillKey) {
-  const sourceId = EXPLORE_SOURCE_IDS[skillKey];
-  if (!sourceId || !actor?.items) return null;
+  const meta = EXPLORATION_ABILITIES[skillKey];
+  if (!meta || !actor?.items) return null;
 
   return actor.items.find(item => {
     if (item.type !== 'specialAbility' || item.system?.category !== 'explore') return false;
-    const candidates = [
-      item.flags?.core?.sourceId,
-      item._stats?.compendiumSource,
-      item.id,
-      item._id
-    ].filter(Boolean);
-    return candidates.some(c => String(c).includes(sourceId));
+    const itemName = item.name?.toLowerCase() || '';
+    return meta.names.some(n => itemName.includes(n.toLowerCase()));
   }) || null;
 }
 
@@ -131,11 +142,10 @@ export async function rollExploration(actor, skillKey, sourceEvent = null) {
     ui.notifications.warn(game.i18n.format('NOTIFY.ExploreAbilityMissing', { skill: skillKey }));
     return false;
   }
-  const event = createFadeRollEvent(sourceEvent);
-  const dataset = {
-    test: 'specialAbility',
-    label: `${item.name}`
-  };
-  await item.roll(dataset, null, event);
+  await item.roll(
+    { test: 'specialAbility', label: item.name },
+    null,
+    createFadeRollEvent(sourceEvent)
+  );
   return true;
 }

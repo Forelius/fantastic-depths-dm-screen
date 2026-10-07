@@ -27,14 +27,7 @@ import {
   isDragon,
   isDemihuman
 } from './class-keys.mjs';
-
-// UUIDs for exploration abilities - UUID per abilità di esplorazione
-const EXPLORATION_ABILITIES = [
-  'Compendium.fade-compendiums.item-compendium.Item.akgcSVIh27fXqbVW',
-  'Compendium.fade-compendiums.item-compendium.Item.nPZLQJzGQ7b0g665',
-  'Compendium.fade-compendiums.item-compendium.Item.qTQsTNYfcHpEki7V',
-  'Compendium.fade-compendiums.item-compendium.Item.BDFBtg7fOKRvlzbd'
-];
+import { EXPLORATION_ABILITIES } from './fade-rolls.mjs';
 
 // Fixed items added to all characters - Oggetti fissi aggiunti a tutti i personaggi
 const FIXED_ITEMS = [
@@ -566,28 +559,11 @@ export class PGGenerator {
     const movementMode = game.fade.registry.getSystem('actorMovement')
       .createDefaultMode('ground', { base: movementBase, turn: movementBase });
     
-    // Hit dice from class level (FaDe will re-apply hd after class prep; we roll HP here)
-    const levels = classSystem.levels || [];
-    const levelEntry = levels.find(l => l.level === level) || 
-                       [...levels].reverse().find(l => l.level <= level) || 
-                       levels[0] || { hd: '1d8' };
-    const hdStr = levelEntry.hd || '1d8';
-    const applyConToHd = levelEntry.hdcon !== false;
-    
-    // CON HP mod from FaDe abilityScore user tables (respects abilityScoreMods setting)
-    const conMod = applyConToHd ? this._getAbilityMod('con', stats.con) : 0;
-    let hpTotal;
-    if (level === 1) {
-      const hdMatch = hdStr.match(/(\d+)d(\d+)/i);
-      if (hdMatch) {
-        const dieSize = parseInt(hdMatch[2]);
-        hpTotal = Math.max(1, dieSize + conMod);
-      } else {
-        hpTotal = Math.max(1, 8 + conMod);
-      }
-    } else {
-      hpTotal = this._rollHPForLevel(hdStr, level, conMod);
-    }
+    // HP from class level hd formula + CON once per level with hdcon
+    const levels = classSystem.levels;
+    const levelEntry = levels.find(l => l.level === level)
+      || [...levels].reverse().find(l => l.level <= level);
+    const hpTotal = this._rollHitPoints(levels, level, stats.con, levelEntry);
     
     const nakedAC = CONFIG.FADE?.Armor?.acNaked ?? 9;
     const { xpCurrent } = this._getLevelXP(levelEntry, level, classSystem);
@@ -717,31 +693,43 @@ export class PGGenerator {
    * Ability score modifier from FaDe abilityScore + userTables (ability-mods-* setting).
    */
   _getAbilityMod(abilityKey, score) {
-    const adjustments = game.fade.registry.getSystem('abilityScore').getAdjustments(abilityKey) || [];
+    const adjustments = game.fade.registry.getSystem('abilityScore').getAdjustments(abilityKey);
     const total = Number(score) || 0;
     const sorted = [...adjustments].sort((a, b) => b.min - a.min);
     const adjustment = sorted.find(item => total >= item.min) ?? sorted[0];
-    return adjustment ? Number(adjustment.value) || 0 : 0;
+    return Number(adjustment.value) || 0;
   }
 
-  // Roll HP for level > 1 - Tira PF per livello > 1
-  _rollHPForLevel(hdStr, level, conMod) {
-    const hdMatch = hdStr.match(/(\d+)d(\d+)/i);
-    if (!hdMatch) return 8 + conMod;
-    
-    const numDice = parseInt(hdMatch[1]);
-    const dieSize = parseInt(hdMatch[2]);
-    
-    let total = 0;
-    for (let i = 0; i < numDice; i++) {
-      total += Math.floor(Math.random() * dieSize) + 1;
+  /**
+   * Roll HP from the class level's hd formula (via classSystem.getParsedHD).
+   * Apply CON mod once for each level row (1..level) with hdcon.
+   */
+  _rollHitPoints(levels, level, conScore, levelEntry) {
+    const levelNum = Number(level) || 1;
+    const { numberOfDice, numberOfSides, modifier } =
+      game.fade.registry.getSystem('classSystem').getParsedHD(levelEntry.hd);
+
+    const dice = [];
+    for (let i = 0; i < numberOfDice; i++) {
+      dice.push(Math.floor(Math.random() * numberOfSides) + 1);
     }
-    
-    // Add CON mod per level for levels 1-9 - Aggiungi mod CON per livello per livelli 1-9
-    const modLevels = Math.min(level, 9);
-    total += conMod * modLevels;
-    
-    return Math.max(1, total);
+    const diceSum = dice.reduce((a, b) => a + b, 0);
+
+    const conMod = this._getAbilityMod('con', conScore);
+    const conApplications = levels.filter(l =>
+      l.level >= 1 && l.level <= levelNum && l.hdcon
+    ).length;
+    const conTotal = conMod * conApplications;
+    const total = Math.max(1, diceSum + modifier + conTotal);
+
+    console.log(
+      `${MODULE_ID} | HP L${levelNum} hd=${levelEntry.hd} | ` +
+      `dice[${dice.join('+')}]=${diceSum}` +
+      (modifier ? ` mod=${modifier >= 0 ? '+' : ''}${modifier}` : '') +
+      ` | CON ${conMod}×${conApplications}=${conTotal} | total=${total}`
+    );
+
+    return total;
   }
 
   // Convert height from feet'inches" format to centimeters - Converti altezza da formato piedi-pollici a centimetri
@@ -874,14 +862,6 @@ export class PGGenerator {
       con: rollStat(),
       cha: rollStat()
     };
-  }
-  
-  _rollHP(hd) {
-    let total = 0;
-    for (let i = 0; i < hd; i++) {
-      total += Math.floor(Math.random() * 8) + 1;
-    }
-    return total;
   }
   
   /** English FaDe alignment tokens only. */
@@ -1268,17 +1248,13 @@ export class PGGenerator {
   
   // Add exploration abilities - Aggiungi abilità esplorazione
   async _addExplorationAbilities(actor) {
-    // Get existing ability names to avoid duplicates - Ottieni nomi abilità esistenti per evitare duplicati
     const existingAbilities = actor.items.filter(i => i.type === 'specialAbility').map(i => i.name);
 
-    for (const uuid of EXPLORATION_ABILITIES) {
+    for (const { uuid } of Object.values(EXPLORATION_ABILITIES)) {
       try {
         const item = await fromUuid(uuid);
-        if (item) {
-          // Skip if actor already has this ability - Salta se l'attore ha già questa abilità
-          if (existingAbilities.includes(item.name)) continue;
-          await actor.createEmbeddedDocuments('Item', [item.toObject()]);
-        }
+        if (!item || existingAbilities.includes(item.name)) continue;
+        await actor.createEmbeddedDocuments('Item', [item.toObject()]);
       } catch (e) {
         console.warn(`${MODULE_ID} | Could not add exploration ability:`, uuid, e);
       }
