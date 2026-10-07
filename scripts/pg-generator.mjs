@@ -19,8 +19,6 @@ import {
   buildClassRequirements,
   getEquipmentKit,
   getClassTokenImage,
-  toAbilityValues,
-  isDruid,
   isFighter,
   isMagicUser,
   isElf,
@@ -39,15 +37,6 @@ const EXPLORATION_ABILITIES = [
   'Compendium.fade-compendiums.item-compendium.Item.nPZLQJzGQ7b0g665',
   'Compendium.fade-compendiums.item-compendium.Item.qTQsTNYfcHpEki7V',
   'Compendium.fade-compendiums.item-compendium.Item.BDFBtg7fOKRvlzbd'
-];
-
-// UUIDs for saving throws - UUID per tiri salvezza
-const SAVING_THROWS = [
-  'Compendium.fade-compendiums.item-compendium.Item.j3TIIGM9mWiQXVKp',
-  'Compendium.fade-compendiums.item-compendium.Item.TSY8SHAE8ovvNBvu',
-  'Compendium.fade-compendiums.item-compendium.Item.J5SgmaRRd8UeZroR',
-  'Compendium.fade-compendiums.item-compendium.Item.FWPTVC5W45aZzZMY',
-  'Compendium.fade-compendiums.item-compendium.Item.y2oCWVc2M1yTE20R'
 ];
 
 // Fixed items added to all characters - Oggetti fissi aggiunti a tutti i personaggi
@@ -261,24 +250,45 @@ export class PGGenerator {
       return null;
     }
     
+    // When level is a fixed number, random class must allow that level (skip PA/DR/etc. firstLevel 9)
+    const levelRaw = String(level ?? '').trim();
+    const requestedLevel = /^\d+$/.test(levelRaw) ? parseInt(levelRaw, 10) : null;
+    // Height options are race-tagged: `5'0"|elf` — constrain random class to that race
+    const { raceGroup: heightRace } = this._parseHeightSelection(height);
+    // Stats before class pick so random can honor ability minimums
+    const finalStats = stats || this._rollStats();
+
     // Get class item (handle random selection)
     let classItem;
     if (classId === '__RANDOM__') {
       const allClasses = this._getAllClasses();
-      const nonDragonClasses = [];
+      const eligibleClasses = [];
       for (const c of allClasses) {
         if (!c.compendium) continue;
         const pack = game.packs.get(c.compendium);
         const doc = pack ? await pack.getDocument(c.id) : null;
-        if (doc?.type === 'class' && !isDragon(doc, getClassSpecies(doc))) {
-          nonDragonClasses.push(doc);
-        }
+        // Dragons only when explicitly selected — never via random
+        if (!doc || doc.type !== 'class') continue;
+        if (isDragon(doc, getClassSpecies(doc)) || /dragon|drago/i.test(doc.name || '')) continue;
+        if (requestedLevel != null && !this._classAllowsLevel(doc, requestedLevel)) continue;
+        if (heightRace && getRaceGroup(doc) !== heightRace) continue;
+        // Skip classes the rolled/entered stats cannot qualify for (e.g. MY needs DEX 13)
+        if (!this.validateClassRequirements(doc, finalStats).valid) continue;
+        eligibleClasses.push(doc);
       }
-      if (nonDragonClasses.length === 0) {
-        ui.notifications.error(game.i18n.localize('NOTIFY.NoRandomClasses'));
+      if (eligibleClasses.length === 0) {
+        ui.notifications.error(
+          heightRace && requestedLevel != null
+            ? game.i18n.format('NOTIFY.NoRandomClassesAtLevelRace', { level: requestedLevel, race: heightRace })
+            : requestedLevel != null
+              ? game.i18n.format('NOTIFY.NoRandomClassesAtLevel', { level: requestedLevel })
+              : heightRace
+                ? game.i18n.format('NOTIFY.NoRandomClassesForRace', { race: heightRace })
+                : game.i18n.localize('NOTIFY.NoRandomClasses')
+        );
         return null;
       }
-      classItem = nonDragonClasses[Math.floor(Math.random() * nonDragonClasses.length)];
+      classItem = eligibleClasses[Math.floor(Math.random() * eligibleClasses.length)];
     } else {
       // Search in compendiums ONLY (never use world items) - Cerca SOLO nei compendium (non usare mai oggetti del mondo)
       for (const pack of game.packs) {
@@ -300,8 +310,7 @@ export class PGGenerator {
     // Evaluate level (support for random/roll formulas)
     const levelNum = await this._evalAsLevel(level, classItem);
     
-    // Validate class requirements
-    const finalStats = stats || this._rollStats();
+    // Explicit class pick: warn if stats miss minimums (still create)
     const validation = this.validateClassRequirements(classItem, finalStats);
     if (!validation.valid) {
       const issues = validation.issues.join(', ');
@@ -358,26 +367,7 @@ export class PGGenerator {
       finalAlignment = this._normalizeAlignment(alignment) || this._rollAlignment();
     }
     
-    // Prepare items array including class item first
-    const items = [];
-    if (classItem) {
-      const classItemData = classItem.toObject();
-      const maxSpellLevel = classItem.system?.spells?.maxSpellLevel || classItem.system?.maxSpellLevel || 0;
-
-      // Always ensure spells structure exists to prevent ClassSystem._prepareSpellLevels crash
-      classItemData.system = classItemData.system || {};
-      if (!classItemData.system.spells) {
-        classItemData.system.spells = {
-          maxSpellLevel: maxSpellLevel,
-          spellSlots: classItem.system?.spells?.spellSlots || [],
-          spellList: classItem.system?.spells?.spellList || {}
-        };
-      }
-
-      items.push(classItemData);
-    }
-    
-    // Build actor data with level support
+    // Authored inputs only — FaDe classSystem fills derived class fields after create
     const actorData = this._buildActorData({
       name: finalName,
       classItem,
@@ -391,14 +381,13 @@ export class PGGenerator {
       disposition
     });
     
-    // Add items to actor data
-    if (items.length > 0) {
-      actorData.items = items;
-    }
-    
-    // Create the actor
     try {
+      // Class + final level must be on the actor at create time. An empty class lets
+      // FaDe SingleClassSystem treat every update as a "clear class" and re-update forever.
       const actor = await Actor.create(actorData);
+
+      // Drive FaDe prep once at the requested level (saves, thac0, xp.next/bonus, abilities, …)
+      await this._applyClassViaFade(actor, classItem, levelNum);
       
       // Add items based on equipment choice
       if (equipment === '__CLASS_KIT__') {
@@ -410,14 +399,16 @@ export class PGGenerator {
       }
       // __NONE__ = no equipment
       
-      // Add abilities, exploration, saves
-      await this._addClassAbilities(actor, classItem, levelNum);
       await this._addExplorationAbilities(actor);
-      await this._addSavingThrows(actor, classItem, levelNum);
       
-      // Detect Evil for specific class keys (each is its own FaDe class item)
+      // Detect Evil only if FaDe class abilities did not already grant it
       if (PALADIN_AVENGER_KEYS.has(getClassKey(classItem))) {
-        await this._addDetectEvilSpell(actor);
+        const hasDetectEvil = actor.items.some(i => {
+          if (i.type !== 'spell') return false;
+          const n = i.name || '';
+          return /detect\s*evil/i.test(n) || /individuazione.*male/i.test(n);
+        });
+        if (!hasDetectEvil) await this._addDetectEvilSpell(actor);
       }
       
       ui.notifications.info(game.i18n.format('GENERATOR.Success', { name: finalName, level: levelNum }));
@@ -429,20 +420,120 @@ export class PGGenerator {
     }
   }
 
+  /**
+   * Run FaDe class prep at the final level (saves, abilities, thac0, xp.next/bonus, …).
+   * Single-class: do NOT use createActorClass (it forces level 1 then a second update).
+   * Multi-class: createActorClass + actorClass level bump.
+   * Temporarily disables ability-prompt dialogs for silent chargen.
+   */
+  async _applyClassViaFade(actor, classItem, levelNum) {
+    const classSystem = game.fade?.registry?.getSystem?.('classSystem');
+    const level = Number(levelNum) || 1;
+
+    if (!classSystem) {
+      console.warn(`${MODULE_ID} | classSystem unavailable; class fields left as created`);
+      return;
+    }
+
+    const promptKey = 'promptAddClassAbilities';
+    const sysId = game.system.id;
+    let prevPrompt;
+    try {
+      prevPrompt = game.settings.get(sysId, promptKey);
+      if (prevPrompt === true) await game.settings.set(sysId, promptKey, false);
+    } catch (e) {
+      prevPrompt = undefined;
+    }
+
+    try {
+      if (classSystem.isMultiClassSystem) {
+        if (!classSystem.createActorClass) return;
+        await classSystem.createActorClass(actor, classItem);
+        if (level > 1) {
+          const key = getClassKey(classItem);
+          const actorClass = actor.items.find(i =>
+            i.type === 'actorClass' && (i.name === classItem.name || i.system?.key === key)
+          );
+          if (actorClass) {
+            await actorClass.update({ 'system.level': level });
+          } else {
+            console.warn(`${MODULE_ID} | actorClass not found after createActorClass for ${classItem.name}`);
+          }
+        }
+      } else if (typeof classSystem.onCharacterActorUpdate === 'function') {
+        // Actor already has class + level from create; run the same prep as a sheet class/level change once
+        await classSystem.onCharacterActorUpdate(actor, {
+          system: {
+            details: {
+              class: classItem.name,
+              level
+            }
+          }
+        }, false);
+      }
+    } finally {
+      if (prevPrompt !== undefined) {
+        try {
+          await game.settings.set(sysId, promptKey, prevPrompt);
+        } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  /**
+   * Parse height select values (`5'0"|elf` or bare `5'0"`).
+   * @returns {{ imperialHeight: string|null, raceGroup: string|null }}
+   */
+  _parseHeightSelection(height) {
+    if (!height || height === '__RANDOM__') {
+      return { imperialHeight: null, raceGroup: null };
+    }
+    const raw = String(height);
+    if (raw.includes('|')) {
+      const [imperialHeight, raceGroup] = raw.split('|');
+      const race = (raceGroup || '').toLowerCase();
+      return {
+        imperialHeight: imperialHeight || null,
+        raceGroup: HEIGHT_WEIGHT_TABLES[race] ? race : null
+      };
+    }
+    // Bare height: unique table match only (human/elf share some values)
+    const matches = Object.entries(HEIGHT_WEIGHT_TABLES)
+      .filter(([, table]) => table.heights.includes(raw))
+      .map(([race]) => race);
+    return {
+      imperialHeight: raw,
+      raceGroup: matches.length === 1 ? matches[0] : null
+    };
+  }
+
+  /** Class level bounds from FaDe class item (`firstLevel` / `maxLevel`). */
+  _getClassLevelBounds(classItem) {
+    const s = classItem?.system || {};
+    const maxLevel = Math.max(1, Number(s.maxLevel) || 36);
+    const first = Number(s.firstLevel);
+    // firstLevel 0 (e.g. Fighter) → treat as 1 for chargen
+    const minLevel = Math.max(1, Number.isFinite(first) ? first : 1);
+    return { minLevel, maxLevel };
+  }
+
+  _classAllowsLevel(classItem, levelNum) {
+    const { minLevel, maxLevel } = this._getClassLevelBounds(classItem);
+    const n = Number(levelNum);
+    return Number.isFinite(n) && n >= minLevel && n <= maxLevel;
+  }
+
   // Evaluate level input (number, dice roll, or random)
   async _evalAsLevel(input, classItem) {
     const raw = String(input ?? '').trim();
-    const classSystem = classItem?.system || {};
-    // Prefer authored class bounds over name-based heuristics
-    const maxLevel = Math.max(1, Number(classSystem.maxLevel) || 36);
-    const minLevel = Math.max(1, Number(classSystem.firstLevel) || 1);
+    const { minLevel, maxLevel } = this._getClassLevelBounds(classItem);
     
     // Empty or "__RANDOM__" = random
     if (!raw || raw === '__RANDOM__') {
       return Math.floor(Math.random() * (maxLevel - minLevel + 1)) + minLevel;
     }
     
-    // Plain number
+    // Plain number — clamp to class bounds (explicit Paladin + level 2 → 9)
     if (/^\d+$/.test(raw)) {
       return Math.min(maxLevel, Math.max(minLevel, parseInt(raw, 10)));
     }
@@ -462,7 +553,6 @@ export class PGGenerator {
   // ==========================================
   
   _buildActorData({ name, classItem, alignment, stats, level = 1, isRetainer, folder, sex, height, disposition = 1 }) {
-    const className = classItem.name;
     const classSystem = classItem.system || {};
     const classKey = getClassKey(classItem);
     const species = getClassSpecies(classItem);
@@ -471,15 +561,16 @@ export class PGGenerator {
     const finalSex = sex || (Math.random() < 0.5 ? 'M' : 'F');
     const sexLabel = finalSex === 'M' ? game.i18n.localize('CHAT.Male') : game.i18n.localize('CHAT.Female');
     
-    // Race / height table from non-localized species
+    // Race / height table from class species (height values may be tagged `5'0"|elf`)
     const race = getRaceGroup(classItem);
+    const { imperialHeight } = this._parseHeightSelection(height);
     
     // Get height and weight from tables - Ottieni altezza e peso dalle tabelle
     const raceTable = HEIGHT_WEIGHT_TABLES[race];
-    let finalHeight = height;
+    let finalHeight = imperialHeight;
     let weight = 0;
     
-    if (finalHeight && finalHeight !== '__RANDOM__') {
+    if (finalHeight) {
       // Use selected height, find corresponding weight - Usa altezza selezionata, trova peso corrispondente
       const heightIndex = raceTable.heights.indexOf(finalHeight);
       if (heightIndex >= 0) {
@@ -516,10 +607,7 @@ export class PGGenerator {
       ? movementSystem.createDefaultMode('ground', { base: movementBase, turn: movementBase })
       : { action: 'ground', base: movementBase, turn: movementBase, round: null, day: null, run: null };
     
-    // Spell level from the selected class item
-    const maxSpellLevel = Number(classSystem?.maxSpellLevel || classSystem?.spells?.maxSpellLevel || 0);
-    
-    // Get class level data
+    // Hit dice from class level (FaDe will re-apply hd after class prep; we roll HP here)
     const levels = classSystem.levels || [];
     const levelEntry = levels.find(l => l.level === level) || 
                        [...levels].reverse().find(l => l.level <= level) || 
@@ -543,16 +631,7 @@ export class PGGenerator {
     }
     
     const nakedAC = CONFIG.FADE?.Armor?.acNaked ?? 9;
-    const baseTHAC0 = CONFIG.FADE?.ToHit?.baseTHAC0 ?? 19;
-    
-    // Calculate XP values - Calcola valori PX
-    const { xpCurrent, xpNext } = this._getLevelXP(levelEntry, level, classSystem);
-    
-    // XP bonus from FaDe ClassDefinitionItem.getXPBonus
-    const xpBonus = this._calculateXPBonus(classItem, stats);
-    
-    // Get class title - Ottieni titolo classe
-    const classTitle = this._getClassTitle(classItem, level);
+    const { xpCurrent } = this._getLevelXP(levelEntry, level, classSystem);
     
     // Build languages - Costruisci lingue
     const languages = this._buildLanguages(classKey, species, alignment, stats.int);
@@ -567,7 +646,6 @@ export class PGGenerator {
     // Get token image - Ottieni immagine token
     const tokenImg = this._getTokenImage(classKey);
     const hasDarkvision = species === 'Elf' || species === 'Dwarf' || isElf(classKey) || isDwarf(classKey);
-    const basicProficiency = !!classSystem.basicProficiency;
     const classReqs = buildClassRequirements(classItem);
     const abilityMins = classSystem.abilities || {};
     const abilityBlock = {};
@@ -583,18 +661,9 @@ export class PGGenerator {
       };
     }
     
-    // Get saves from class - Ottieni tiri salvezza dalla classe
-    const saves = classSystem.saves || {};
-    let levelSaves = {};
-    if (Array.isArray(saves)) {
-      const entry = saves.find(s => s.level === level) || 
-                    [...saves].reverse().find(s => s.level <= level) || 
-                    saves[0];
-      if (entry) levelSaves = entry;
-    } else {
-      levelSaves = saves;
-    }
-    
+    // Identity + level on create (never leave class empty — FaDe single-class loops on updates).
+    // Derived thac0 / saves / xp.next / bonus / title filled by classSystem prep after create.
+    const levelNum = Number(level) || 1;
     return {
       name,
       type: 'character',
@@ -602,57 +671,42 @@ export class PGGenerator {
       folder: folder?.id || null,
       system: {
         details: {
-          class: className,
-          classId: classItem.id,
-          classKey: classKey,
-          species: species,
+          class: classItem.name,
+          classKey,
+          castAsKey: classSystem.castAsKey || null,
+          species,
           alignment,
-          level: String(level),
-          title: classTitle,
+          level: levelNum,
           sex: sexLabel,
           height: displayHeight,
           weight: weight,
-          xp: { 
-            value: String(xpCurrent), 
-            bonus: xpBonus,
-            next: String(xpNext) 
+          xp: {
+            value: String(xpCurrent)
           },
           isNPC: false,
           background: 'PG Generato al volo'
         },
         hp: {
           value: hpTotal,
-          max: hpTotal,
-          hd: hdStr
+          max: hpTotal
         },
         ac: {
           base: nakedAC,
           total: nakedAC
         },
         abilities: abilityBlock,
-        thac0: { value: levelEntry?.thac0 || classSystem.thac0 || baseTHAC0 },
         movement: {
           modifiers: { encumbrance: 1 },
           modes: [movementMode]
         },
-        combat: {
-          basicProficiency
-        },
-        saves: {
-          breath: levelSaves.breath || 15,
-          poison: levelSaves.poison || 15,
-          paralysis: levelSaves.paralysis || 15,
-          spell: levelSaves.spell || 15,
-          magic: levelSaves.magic || 15
+        config: {
+          firstSpellLevel: Number(classSystem.firstSpellLevel) || 1,
+          maxSpellLevel: Number(classSystem.maxSpellLevel || classSystem.spells?.maxSpellLevel) || 0
         },
         isRetainer,
         biography: gmNotes,
         languages: languages,
-        gm: { notes: '' },
-        maxSpellLevel: maxSpellLevel,
-        config: {
-          maxSpellLevel: maxSpellLevel
-        }
+        gm: { notes: '' }
       },
       prototypeToken: {
         name,
@@ -695,25 +749,9 @@ export class PGGenerator {
     };
   }
 
-  // Max spell level from class item (system of record)
-  _getMaxSpellLevel(classItem) {
-    return Number(classItem?.system?.maxSpellLevel || classItem?.system?.spells?.maxSpellLevel || 0);
-  }
-
-  // XP from class levels only (no invented progression table)
-  _getLevelXP(levelEntry, level, classSystem) {
-    let xpCurrent = 0;
-    let xpNext = 0;
-    
-    if (levelEntry) {
-      xpCurrent = levelEntry.xp || 0;
-    }
-    const nextLevelEntry = classSystem.levels?.find(l => l.level === level + 1);
-    if (nextLevelEntry?.xp != null) {
-      xpNext = nextLevelEntry.xp;
-    }
-    
-    return { xpCurrent, xpNext };
+  // Starting XP at this level from class levels[] (FaDe sets xp.next / bonus)
+  _getLevelXP(levelEntry, _level, _classSystem) {
+    return { xpCurrent: levelEntry?.xp || 0 };
   }
 
   /**
@@ -754,37 +792,6 @@ export class PGGenerator {
     total += conMod * modLevels;
     
     return Math.max(1, total);
-  }
-
-  // XP bonus via FaDe ClassDefinitionItem.getXPBonus (primeReqs on the class item)
-  _calculateXPBonus(classItem, stats) {
-    if (typeof classItem?.getXPBonus === 'function') {
-      const bonus = classItem.getXPBonus(toAbilityValues(stats));
-      return String(bonus ?? 0);
-    }
-    return '0';
-  }
-
-  // Get class title for level - Ottieni titolo classe per livello
-  _getClassTitle(classItem, levelNum) {
-    if (isDragon(classItem, getClassSpecies(classItem))) return '';
-    
-    const levels = classItem?.system?.levels;
-    if (!levels || !Array.isArray(levels)) return '';
-    
-    // Find title for current level - Trova titolo per livello corrente
-    const levelData = levels.find(l => l.level === levelNum);
-    if (levelData?.title) return levelData.title;
-    
-    // Find highest title at or below current level - Trova titolo più alto al o sotto livello corrente
-    if (levelNum > 1) {
-      const levelsWithTitle = levels
-        .filter(l => l.title && l.title.trim() !== '')
-        .sort((a, b) => b.level - a.level);
-      if (levelsWithTitle.length > 0) return levelsWithTitle[0].title;
-    }
-    
-    return '';
   }
 
   // Convert height from feet'inches" format to centimeters - Converti altezza da formato piedi-pollici a centimetri
@@ -1309,167 +1316,6 @@ export class PGGenerator {
     
   }
   
-  async _addClassAbilities(actor, classItem, levelNum) {
-    // Get class abilities based on level - Ottieni abilità classe basate su livello
-    const items = [];
-    const addedAbilityNames = new Set(); // Track already added abilities to prevent duplicates - Traccia abilità già aggiunte per prevenire duplicati
-    const classSystem = classItem?.system || {};
-    const classKey = getClassKey(classItem);
-    const levels = classSystem?.levels || [];
-    
-    // Helper to find ability item in compendiums ONLY - Helper per trovare oggetto abilità SOLO nei compendium
-    const findAbilityItem = async (abilityName) => {
-      // Search in compendiums ONLY (never use world items) - Cerca SOLO nei compendium (non usare mai oggetti del mondo)
-      const packs = game.packs?.filter(p => p.metadata.type === 'Item') || [];
-      for (const pack of packs) {
-        const compendiumItem = pack.index?.find(i => 
-          i.type === 'specialAbility' && 
-          i.name?.toLowerCase() === abilityName?.toLowerCase()
-        );
-        if (compendiumItem) {
-          try {
-            const fullItem = await pack.getDocument(compendiumItem._id);
-            if (fullItem) return fullItem;
-          } catch (e) {}
-        }
-      }
-      return null;
-    };
-    
-    // Get description from ability reference or item - Ottieni descrizione da riferimento abilità o oggetto
-    const getDescription = (abilityRef, abilityItem) => {
-      if (abilityItem?.system?.description) {
-        return typeof abilityItem.system.description === 'object' 
-          ? abilityItem.system.description?.value || '' 
-          : abilityItem.system.description;
-      }
-      if (abilityRef?.description) {
-        return typeof abilityRef.description === 'object' 
-          ? abilityRef.description?.value || '' 
-          : abilityRef.description;
-      }
-      return '';
-    };
-    
-    // Import abilities from class definition - Importa abilità da definizione classe
-    const importAbilitiesFromClass = async (sourceClass, maxLevel, prefix = '') => {
-      const levels = sourceClass?.system?.levels || [];
-      const classAbilities = sourceClass?.system?.specialAbilities || [];
-      
-      // Add special abilities from class definition - Aggiungi abilità speciali da definizione classe
-      for (const ability of classAbilities) {
-        const abilityLevel = ability.level || ability.requiredLevel || 1;
-        if (abilityLevel <= maxLevel) {
-          const abilityKey = prefix + ability.name;
-          if (addedAbilityNames.has(abilityKey)) continue; // Skip duplicates
-          
-          const abilityItem = await findAbilityItem(ability.name);
-          const description = getDescription(ability, abilityItem);
-          
-          items.push({
-            name: prefix + (ability.name || 'Abilità'),
-            type: 'specialAbility',
-            img: abilityItem?.img || 'systems/fantastic-depths/assets/img/item/specialAbility.png',
-            system: {
-              description: description,
-              category: abilityItem?.system?.category || ability.category || 'class',
-              classKey: classKey,
-              shortName: abilityItem?.system?.shortName || ability.shortName || '',
-              level: abilityLevel
-            }
-          });
-          addedAbilityNames.add(abilityKey);
-        }
-      }
-      
-      // Add level-specific abilities - Aggiungi abilità specifiche per livello
-      for (let lvl = 1; lvl <= maxLevel; lvl++) {
-        const levelEntry = levels.find(x => x.level === lvl);
-        if (levelEntry?.specialAbilities) {
-          for (const ability of levelEntry.specialAbilities) {
-            const abilityKey = prefix + ability.name;
-            if (addedAbilityNames.has(abilityKey)) continue; // Skip duplicates
-            
-            const abilityItem = await findAbilityItem(ability.name);
-            const description = getDescription(ability, abilityItem);
-            
-            items.push({
-              name: prefix + (ability.name || 'Abilità'),
-              type: 'specialAbility',
-              img: abilityItem?.img || 'systems/fantastic-depths/assets/img/item/specialAbility.png',
-              system: {
-                description: description,
-                category: abilityItem?.system?.category || ability.category || 'class',
-                classKey: classKey,
-                shortName: abilityItem?.system?.shortName || ability.shortName || '',
-                level: lvl
-              }
-            });
-            addedAbilityNames.add(abilityKey);
-          }
-        }
-      }
-    };
-    
-    // Find class item by non-localized system.key (prefer FaDe fadeFinder)
-    const findClassItemByKey = async (targetKey) => {
-      const want = getClassKey(targetKey);
-      if (game.fade?.fadeFinder?.getClass) {
-        try {
-          const found = await game.fade.fadeFinder.getClass(null, want);
-          if (found) return found;
-        } catch (e) {}
-      }
-      const packs = game.packs?.filter(p => p.metadata.type === 'Item') || [];
-      for (const pack of packs) {
-        const classEntries = pack.index?.filter(i => i.type === 'class') || [];
-        for (const entry of classEntries) {
-          try {
-            const fullItem = await pack.getDocument(entry._id);
-            if (fullItem && getClassKey(fullItem) === want) return fullItem;
-          } catch (e) {}
-        }
-      }
-      return null;
-    };
-    
-    // Handle special class combinations (Paladin/Avenger, Druid) by class key
-    try {
-      if (PALADIN_AVENGER_KEYS.has(classKey)) {
-        const fighterClass = await findClassItemByKey('F');
-        // Level-9 warrior career changes — import Fighter abilities to 9
-        if (fighterClass) {
-          await importAbilitiesFromClass(fighterClass, 9, `[${fighterClass.name}] `);
-        } else {
-          console.warn(`${MODULE_ID} | ⚠️ Could not find Fighter (F) class for ${classKey} abilities`);
-        }
-      }
-      
-      if (isDruid(classKey)) {
-        const clericClass = await findClassItemByKey('C');
-        // Druids are level 9 clerics who change career
-        if (clericClass) {
-          await importAbilitiesFromClass(clericClass, 9, `[${clericClass.name}] `);
-        } else {
-          console.warn(`${MODULE_ID} | ⚠️ Could not find Cleric (C) class for Druid abilities`);
-        }
-      }
-      
-      await importAbilitiesFromClass(classItem, levelNum);
-    } catch (e) {
-      console.warn(`${MODULE_ID} | Error importing class abilities:`, e);
-    }
-    
-    // Create all ability items - Crea tutti gli oggetti abilità
-    for (const itemData of items) {
-      try {
-        await actor.createEmbeddedDocuments('Item', [itemData]);
-      } catch (err) {
-        console.warn(`${MODULE_ID} | Could not add ability:`, itemData.name, err);
-      }
-    }
-  }
-
   // Add exploration abilities - Aggiungi abilità esplorazione
   async _addExplorationAbilities(actor) {
     // Get existing ability names to avoid duplicates - Ottieni nomi abilità esistenti per evitare duplicati
@@ -1488,49 +1334,6 @@ export class PGGenerator {
       }
     }
   }
-
-  // Add saving throws as special ability items - Aggiungi tiri salvezza come oggetti abilità speciali
-  async _addSavingThrows(actor, classItem, levelNum) {
-    const saveTypes = [
-      { key: 'death', name: 'Veleno o Raggio della Morte', short: 'Morte' },
-      { key: 'wand', name: 'Bacchetta Magica', short: 'Bacchetta' },
-      { key: 'paralysis', name: 'Pietrificazione o Paralisi', short: 'Pietrificazione' },
-      { key: 'breath', name: 'Soffio del Drago', short: 'Soffio' },
-      { key: 'spell', name: 'Incantesimi, Verga o Bastone Magico', short: 'Incantesimo' }
-    ];
-    
-    // Get saves data for current level - Ottieni dati tiri salvezza per livello corrente
-    const savesData = classItem?.system?.saves || [];
-    let levelSaves = {};
-    if (Array.isArray(savesData)) {
-      const entry = savesData.find(s => s.level === levelNum) || 
-                    [...savesData].reverse().find(s => s.level <= levelNum) || 
-                    savesData[0];
-      if (entry) levelSaves = entry;
-    } else {
-      levelSaves = savesData;
-    }
-    
-    // Add saving throw items - Aggiungi oggetti tiri salvezza
-    for (let i = 0; i < SAVING_THROWS.length; i++) {
-      const uuid = SAVING_THROWS[i];
-      const saveType = saveTypes[i];
-      try {
-        const item = await fromUuid(uuid);
-        if (item) {
-          const itemData = item.toObject();
-          // Update target based on class saves - Aggiorna bersaglio basato su tiri salvezza classe
-          if (saveType && levelSaves[saveType.key]) {
-            itemData.system.target = String(levelSaves[saveType.key]);
-            itemData.system.level = levelNum;
-          }
-          await actor.createEmbeddedDocuments('Item', [itemData]);
-        }
-      } catch (e) {
-        console.warn(`${MODULE_ID} | Could not add saving throw:`, uuid, e);
-      }
-    }
-  }
   
   // ==========================================
   // Class Requirements Validation - Validazione Requisiti Classe
@@ -1544,20 +1347,23 @@ export class PGGenerator {
       issues: []
     };
     
-    const statNames = {
-      str: 'FOR',
-      dex: 'DES',
-      con: 'COS',
-      int: 'INT',
-      wis: 'SAG',
-      cha: 'CAR'
+    const statKeys = {
+      str: 'ABILITY.STR',
+      dex: 'ABILITY.DEX',
+      con: 'ABILITY.CON',
+      int: 'ABILITY.INT',
+      wis: 'ABILITY.WIS',
+      cha: 'ABILITY.CHA'
     };
     
     for (const [stat, minValue] of Object.entries(requirements.min || {})) {
       if (stats[stat] < minValue) {
         results.valid = false;
-        const statName = statNames[stat] || stat.toUpperCase();
-        results.issues.push(`${statName} deve essere almeno ${minValue}`);
+        const statName = game.i18n.localize(statKeys[stat] || stat.toUpperCase());
+        results.issues.push(game.i18n.format('NOTIFY.StatMinRequirement', {
+          stat: statName,
+          min: minValue
+        }));
       }
     }
     
