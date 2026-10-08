@@ -584,62 +584,72 @@ Hooks.on('getSceneControlButtons', (controls) => {
   }
 });
 
+/** Remove the on-screen DM Screen book icon from the action bar. */
+function removeActionBarButton() {
+  $('#ui-bottom .fd-ds-action-btn').remove();
+}
+
+/** Add the on-screen DM Screen book icon to the action bar (GM only, if setting enabled). */
+function addActionBarButton() {
+  if (!game.user.isGM) return;
+  if (!game.settings.get(MODULE_ID, 'showActionBarButton')) return;
+
+  try {
+    const $uiBottom = $('#ui-bottom');
+    if (!$uiBottom.length) return;
+    if ($uiBottom.find('.fd-ds-action-btn').length > 0) return;
+
+    const button = $(`
+      <div class="macro-slot fd-ds-action-btn" 
+           style="margin: 8px; flex: 0 0 auto; pointer-events: auto;">
+        <button class="flexcol fd-ds-btn"
+                data-tooltip="${game.i18n.localize('BUTTON.Title')}"
+                style="width: 50px; height: 50px; pointer-events: auto; border-radius: 24px 24px 5px 5px; background-color: rgba(11, 10, 19, 0.4);"
+                onmouseover="this.style.backgroundColor='#5b4f17'; this.querySelector('i').style.color='#FFD700'"
+                onmouseout="this.style.backgroundColor='rgba(11, 10, 19, 0.4)'; this.querySelector('i').style.color=''">
+          <i class="fas fa-book-open" style="font-size: 24px;"></i>
+        </button>
+      </div>
+    `);
+
+    button.find('.fd-ds-btn').on('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!globalThis.activePGPXApp || !globalThis.activePGPXApp.rendered) {
+        globalThis.activePGPXApp = new PGPXManagerApp();
+        globalThis.activePGPXApp.render(true);
+      } else {
+        globalThis.activePGPXApp.bringToFront();
+      }
+    });
+
+    const $fadedUi = $uiBottom.find('.faded-ui');
+    if ($fadedUi.length) {
+      $fadedUi.before(button);
+    } else {
+      const $hotbar = $uiBottom.find('.hotbar');
+      if ($hotbar.length) {
+        $hotbar.before(button);
+      } else {
+        $uiBottom.append(button);
+      }
+    }
+  } catch (err) {
+    console.error('[fantastic-depths-dm-screen] Error adding action bar button:', err);
+  }
+}
+
+/** Apply show/hide for the on-screen book icon from the client setting. */
+function refreshActionBarButton() {
+  removeActionBarButton();
+  addActionBarButton();
+}
+
 // Add DM Screen button to main action bar (top center) - Aggiunge pulsante DM Screen alla action-bar principale (in alto al centro)
 Hooks.on('ready', () => {
   if (!game.user.isGM) return;
-  
   // Wait for UI to be fully loaded
-  setTimeout(() => {
-    try {
-      // Find the ui-bottom container (bottom footer)
-      const $uiBottom = $('#ui-bottom');
-      if (!$uiBottom.length) return;
-      
-      // Check if button already exists
-      if ($uiBottom.find('.fd-ds-action-btn').length > 0) return;
-      
-      // Create the button with DM Screen icon using hotbar slot classes
-      const button = $(`
-        <div class="macro-slot fd-ds-action-btn" 
-             style="margin: 8px; flex: 0 0 auto; pointer-events: auto;">
-          <button class="flexcol fd-ds-btn"
-                  data-tooltip="${game.i18n.localize('BUTTON.Title')}"
-                  style="width: 50px; height: 50px; pointer-events: auto; border-radius: 24px 24px 5px 5px; background-color: rgba(11, 10, 19, 0.4);"
-                  onmouseover="this.style.backgroundColor='#5b4f17'; this.querySelector('i').style.color='#FFD700'"
-                  onmouseout="this.style.backgroundColor='rgba(11, 10, 19, 0.4)'; this.querySelector('i').style.color=''">
-            <i class="fas fa-book-open" style="font-size: 24px;"></i>
-          </button>
-        </div>
-      `);
-      
-      // Add click handler directly to the inner button
-      button.find('.fd-ds-btn').on('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!globalThis.activePGPXApp || !globalThis.activePGPXApp.rendered) {
-          globalThis.activePGPXApp = new PGPXManagerApp();
-          globalThis.activePGPXApp.render(true);
-        } else {
-          globalThis.activePGPXApp.bringToFront();
-        }
-      });
-      
-      // Insert button before the faded-ui flexrow (hotbar)
-      const $fadedUi = $uiBottom.find('.faded-ui');
-      if ($fadedUi.length) {
-        $fadedUi.before(button);
-      } else {
-        const $hotbar = $uiBottom.find('.hotbar');
-        if ($hotbar.length) {
-          $hotbar.before(button);
-        } else {
-          $uiBottom.append(button);
-        }
-      }
-    } catch (err) {
-      console.error('[fantastic-depths-dm-screen] Error adding action bar button:', err);
-    }
-  }, 1000);
+  setTimeout(() => addActionBarButton(), 1000);
 });
 
 // Debounce timer per evitare render multipli ravvicinati
@@ -777,15 +787,6 @@ function setupCombatHooks() {
     if (!game.user.isGM) return;
     console.log(`[fantastic-depths-dm-screen] deleteCombat | combatId: ${globalThis.combatId}, combat.id: ${combat.id}, combatXP: ${globalThis.combatXP}, combatStarted: ${globalThis.combatStarted}`);
     if (globalThis.combatId === combat.id && globalThis.combatXP > 0 && globalThis.combatStarted) {
-      // Check if carousel flagged this combat to skip XP (user chose "No" on XP dialog)
-      if (combat.getFlag?.('fantastic-depths-combat-carousel', 'skipXP')) {
-        console.log(`[fantastic-depths-dm-screen] deleteCombat | skipXP flag set — resetting without XP`);
-        globalThis.combatXP = 0;
-        globalThis.combatId = null;
-        globalThis.combatStarted = false;
-        globalThis.combatants.clear();
-        return;
-      }
       // Wait a tick for FaDe's end-combat chat message to appear
       await new Promise(r => setTimeout(r, 300));
       // Check if FaDe posted an "end combat" chat message (only End Combat does this, not Delete Encounter)
@@ -872,6 +873,12 @@ async function processCombatEnd(combat) {
   // If no XP to apply, do nothing - Se non ci sono PX da applicare, non fare nulla
   if (combatXPToApply <= 0) {
     console.log(`[${MODULE_ID}] processCombatEnd | No XP to apply (combatXPToApply: ${combatXPToApply}), returning.`);
+    return;
+  }
+
+  // Setting: show XP UI when combat ends (default true)
+  if (!game.settings.get(MODULE_ID, 'showXPOnCombatEnd')) {
+    console.log(`[${MODULE_ID}] processCombatEnd | showXPOnCombatEnd disabled, skipping XP UI (xp=${combatXPToApply})`);
     return;
   }
   
@@ -1083,6 +1090,29 @@ function registerSettings() {
       generator: 'SETTINGS.DefaultTab.Generator'
     },
     default: 'party'
+  });
+
+  // Show/hide the on-screen DM Screen book icon (per client, GM-only config)
+  game.settings.register(MODULE_ID, 'showActionBarButton', {
+    name: 'SETTINGS.ShowActionBarButton.Name',
+    hint: 'SETTINGS.ShowActionBarButton.Hint',
+    scope: 'client',
+    config: true,
+    restricted: true,
+    type: Boolean,
+    default: true,
+    onChange: () => refreshActionBarButton()
+  });
+
+  // Open/apply Award XP when combat ends with XP to award
+  game.settings.register(MODULE_ID, 'showXPOnCombatEnd', {
+    name: 'SETTINGS.ShowXPOnCombatEnd.Name',
+    hint: 'SETTINGS.ShowXPOnCombatEnd.Hint',
+    scope: 'client',
+    config: true,
+    restricted: true,
+    type: Boolean,
+    default: true
   });
   
   // Unit system setting (Metric vs Imperial) - Impostazione sistema unità (Metrico vs Imperiale)

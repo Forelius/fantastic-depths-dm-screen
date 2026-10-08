@@ -219,6 +219,10 @@
   "SETTINGS.DefaultTab.Award": "💰 Assegna PX",
   "SETTINGS.DefaultTab.Pending": "⏳ PX in Attesa",
   "SETTINGS.DefaultTab.Generator": "⚔️ Genera PG",
+  "SETTINGS.ShowActionBarButton.Name": "Mostra Pulsante Libro DM Screen",
+  "SETTINGS.ShowActionBarButton.Hint": "Mostra l'icona del libro aperto sulla action bar della hotbar per aprire il DM Screen. Vale solo per il tuo client.",
+  "SETTINGS.ShowXPOnCombatEnd.Name": "Mostra PX a Fine Combattimento",
+  "SETTINGS.ShowXPOnCombatEnd.Hint": "Quando il combattimento termina con PX da assegnare, apre la tab Assegna PX (o applica i PX se il DM Screen è già aperto). Vale solo per il tuo client.",
 
   "CHAT.PCGenerator": "PG al Volo",
   "CHAT.AbilityScores": "Punteggi di Abilità",

@@ -225,6 +225,10 @@
   "SETTINGS.DefaultTab.Award": "💰 Award XP",
   "SETTINGS.DefaultTab.Pending": "⏳ Pending XP",
   "SETTINGS.DefaultTab.Generator": "⚔️ Generate PC",
+  "SETTINGS.ShowActionBarButton.Name": "Show DM Screen Book Button",
+  "SETTINGS.ShowActionBarButton.Hint": "Show the open-book icon on the hotbar action bar used to open the DM Screen. Applies only to your client.",
+  "SETTINGS.ShowXPOnCombatEnd.Name": "Show XP When Combat Ends",
+  "SETTINGS.ShowXPOnCombatEnd.Hint": "When combat ends with XP to award, open the Award XP tab (or apply XP if the DM Screen is already open). Applies only to your client.",
 
   "CHAT.PCGenerator": "PC Generator",
   "CHAT.AbilityScores": "Ability Scores",
